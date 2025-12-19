@@ -1,0 +1,27 @@
+{
+  "projectName": "API Server",
+  "port": 8633,
+  "staticDir": "public",
+  "apiDir": "api",
+  "index": {
+    "templatePath": "public/html/index.html"
+  },
+  "error": {
+    "templatePath": "public/html/error.html"
+  },
+  "markdown": {
+    "templatePath": "public/html/markdown.html"
+  },
+  "log": {
+    "enableFile": true,
+    "logPath": "access.log",
+    "timezone": 8,
+    "ipHeader": "X-Forwarded-For"
+  },
+  "rateLimit": {
+    "enabled": true,
+    "timeWindow": 60,
+    "maxRequests": 100,
+    "ipHeader": "X-Forwarded-For"
+  }
+}
