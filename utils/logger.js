@@ -5,7 +5,18 @@ class Logger {
     this.enableFile = config.enableFile || false;
     this.logPath = config.logPath || 'access.log';
     this.timezone = config.timezone || 8; // 默认 UTC+8
-    this.ipHeader = config.ipHeader || 'X-Forwarded-For';
+    this.ipHeader = config.ipHeader === undefined ? 'X-Forwarded-For' : config.ipHeader;
+  }
+
+  getForwardedIP(req) {
+    if (!this.ipHeader) return '';
+    const headerValue = req.get(this.ipHeader);
+    if (!headerValue) return '';
+    const first = String(headerValue)
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean)[0];
+    return first || '';
   }
 
   formatTime(date) {
@@ -24,7 +35,8 @@ class Logger {
   }
 
   formatLog(req, res, startTime) {
-    const ip = req.ip || req.connection.remoteAddress || '-';
+    const forwardedIP = this.getForwardedIP(req);
+    const ip = forwardedIP || req.ip || req.connection.remoteAddress || '-';
     const time = this.formatTime(new Date());
     const method = req.method || '-';
     const urlPath = req.originalUrl || req.url || '-';
@@ -33,9 +45,8 @@ class Logger {
     const bytes = res.get('Content-Length') || '-';
     const referer = req.get('Referer') || '-';
     const userAgent = req.get('User-Agent') || '-';
-    const forwardedIP = req.get(this.ipHeader) || '-';
 
-    return `${ip} - [${time}] "${method} ${urlPath} ${protocol}" ${status} ${bytes} "${referer}" "${userAgent}" "${forwardedIP}"`;
+    return `${ip} - [${time}] "${method} ${urlPath} ${protocol}" ${status} ${bytes} "${referer}" "${userAgent}" "${forwardedIP || '-'}"`;
   }
 
   write(logEntry) {

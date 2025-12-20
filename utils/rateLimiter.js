@@ -5,7 +5,7 @@ class RateLimiter {
     this.enabled = config.enabled !== false;
     this.timeWindow = config.timeWindow || 60;
     this.maxRequests = config.maxRequests || 100;
-    this.ipHeader = config.ipHeader || 'X-Forwarded-For';
+    this.ipHeader = config.ipHeader === undefined ? 'X-Forwarded-For' : config.ipHeader;
     this.ipRecords = new Map();
 
     this.cleanupInterval = setInterval(() => {
@@ -17,7 +17,11 @@ class RateLimiter {
     if (this.ipHeader) {
       const forwardedIP = req.get(this.ipHeader);
       if (forwardedIP) {
-        return forwardedIP.split(',')[0].trim();
+        const first = String(forwardedIP)
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean)[0];
+        if (first) return first;
       }
     }
     return req.ip || req.connection.remoteAddress || '0.0.0.0';
