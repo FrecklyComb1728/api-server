@@ -14,22 +14,29 @@
   ],
   "response_fields": [
     "ip",
+    "prov",
     "city",
+    "district",
     "country",
-    "isp"
+    "isp",
+    "lon",
+    "lat"
   ],
   "upstream_apis": [
     {
       "name": "ip9",
       "url": "https://ip9.com.cn/get?ip={ip}",
-      "max_requests": 40,
+      "max_requests": 50,
       "time_window": 60,
       "enabled": true,
       "field_mapping": {
         "ip": "data.ip",
-        "city": "data.prov,data.city,data.area",
+        "prov": "data.prov",
+        "city": "data.city",
         "country": "data.country",
-        "isp": "data.isp"
+        "isp": "data.isp",
+        "lon": "data.lng",
+        "lat": "data.lat"
       }
     },
     {
@@ -40,9 +47,13 @@
       "enabled": true,
       "field_mapping": {
         "ip": "data.ip",
-        "city": "data.province,data.city",
+        "prov": "data.province",
+        "city": "data.city",
+        "district": "data.district",
         "country": "data.country",
-        "isp": "data.isp"
+        "isp": "data.isp",
+        "lon": "data.longitude",
+        "lat": "data.latitude"
       }
     },
     {
@@ -53,9 +64,13 @@
       "enabled": true,
       "field_mapping": {
         "ip": "ip",
-        "city": "data.province,data.city",
+        "prov": "data.province",
+        "city": "data.city",
+        "district": "data.district",
         "country": "data.country",
-        "isp": "data.isp"
+        "isp": "data.isp",
+        "lon": "data.longitude",
+        "lat": "data.latitude"
       }
     }
   ]

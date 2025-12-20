@@ -433,11 +433,11 @@ router.get('/realtime', async (req, res) => {
     if (!cityQuery) {
       return res.status(400).json({ success: false, message: '缺少city或无法通过IP解析城市' });
     }
-    const data = await buildBoth(req, cityQuery);
-    if (!data.realtime && (!data.week || data.week.length === 0)) {
+    const realtime = await buildRealtime(req, cityQuery);
+    if (!realtime) {
       return res.status(502).json({ success: false, message: '上游天气接口不可用' });
     }
-    res.json({ success: true, data });
+    res.json({ success: true, data: { realtime } });
   } catch (e) {
     res.status(500).json({ success: false, message: String(e?.message || e) });
   }
@@ -449,11 +449,11 @@ router.get('/week', async (req, res) => {
     if (!cityQuery) {
       return res.status(400).json({ success: false, message: '缺少city或无法通过IP解析城市' });
     }
-    const data = await buildBoth(req, cityQuery);
-    if (!data.realtime && (!data.week || data.week.length === 0)) {
+    const week = await buildWeek(cityQuery);
+    if (!week || week.length === 0) {
       return res.status(404).json({ success: false, message: '未找到城市ID或上游不可用' });
     }
-    res.json({ success: true, data });
+    res.json({ success: true, data: { week } });
   } catch (e) {
     res.status(500).json({ success: false, message: String(e?.message || e) });
   }

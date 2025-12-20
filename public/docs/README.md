@@ -1,6 +1,6 @@
 # API Server
 
-这是一个基于 Express 的 API 中转服务：自动加载 `api/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问。
+一个基于 Nodejs 的 API Server：自动加载 `api/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问
 
 ## 运行
 
@@ -21,16 +21,17 @@ pnpm dev
 
 - 配置：[config.md](config.md)
 - 插件：[plugin.md](plugin.md)
-- IP 查询：[ip.md](ip.md)
-- 天气预报：[weather.md](weather.md)
+- API：
+  - IP 查询：[ip.md](ip.md)
+  - 天气预报：[weather.md](weather.md)
 
 ## 已实现 API
 
 ### IP 查询
 
-- `GET /api/ip`（等价于 `/api/ipinfo`）
-- `GET /api/ip?ip={ip}`
-- `GET /api/ip/{ip}`
+- `GET /api/ipinfo`
+- `GET /api/ipinfo?ip={ip}`
+- `GET /api/ipinfo/{ip}`
 
 返回为统一结构：
 
@@ -93,3 +94,4 @@ pnpm dev
   }
 }
 ```
+
