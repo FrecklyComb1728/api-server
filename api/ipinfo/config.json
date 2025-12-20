@@ -1,7 +1,7 @@
 {
-  "default_timeout": 5000,
+  "default_timeout": 1000,
   "retry_count": 3,
-  "cache_ttl": 3600,
+  "cache_ttl": 7,
   "load_balance_strategy": "least_used",
   "ip_headers": [
     {"name": "X-Forwarded-For", "priority": 1},
