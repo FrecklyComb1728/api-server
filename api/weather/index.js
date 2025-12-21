@@ -6,6 +6,45 @@ const { queryIpInfoWithRetry, getClientIp } = require('../ipinfo');
 
 const router = express.Router();
 
+const realtimeUpstreamState = new Map();
+let lastUsedRealtimeUpstreamIndex = -1;
+
+function getRealtimeUpstreamState(name) {
+  const key = String(name || '').trim();
+  if (!key) return { failures: 0, unavailableUntil: 0 };
+  if (!realtimeUpstreamState.has(key)) {
+    realtimeUpstreamState.set(key, { failures: 0, unavailableUntil: 0 });
+  }
+  return realtimeUpstreamState.get(key);
+}
+
+function markRealtimeUpstreamSuccess(name) {
+  const st = getRealtimeUpstreamState(name);
+  st.failures = 0;
+  st.unavailableUntil = 0;
+}
+
+function markRealtimeUpstreamFailure(name) {
+  const st = getRealtimeUpstreamState(name);
+  st.failures = Math.min(10, (st.failures || 0) + 1);
+  const base = Number(config?.realtime_failover_cooldown_ms) || 30000;
+  const max = Number(config?.realtime_failover_cooldown_max_ms) || 300000;
+  const cooldown = Math.min(max, base * Math.pow(2, Math.max(0, st.failures - 1)));
+  st.unavailableUntil = Date.now() + cooldown;
+}
+
+function isRealtimeUpstreamAvailable(name) {
+  const st = getRealtimeUpstreamState(name);
+  return Date.now() >= (st.unavailableUntil || 0);
+}
+
+function selectNextRealtimeUpstream(available) {
+  if (!available || available.length === 0) return null;
+  if (available.length === 1) return available[0];
+  lastUsedRealtimeUpstreamIndex = (lastUsedRealtimeUpstreamIndex + 1) % available.length;
+  return available[lastUsedRealtimeUpstreamIndex];
+}
+
 function readJsonFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf-8');
   return JSON.parse(raw);
@@ -281,6 +320,57 @@ async function fetchSuyanRealtime(http, cityQuery) {
   };
 }
 
+async function queryRealtimeWithRetry(http, cityQuery) {
+  const upstreams = [
+    { name: 'bing_msn', enabled: Boolean(config?.bing?.enabled && config?.msn?.enabled), fn: () => fetchBingMsnRealtime(http, cityQuery) },
+    { name: 'amap', enabled: Boolean(config?.amap?.enabled), fn: () => fetchAmapRealtime(http, cityQuery) },
+    { name: 'vmy', enabled: Boolean(config?.vmy?.enabled), fn: () => fetchVmyRealtime(http, cityQuery) },
+    { name: 'suyan', enabled: Boolean(config?.suyan?.enabled), fn: () => fetchSuyanRealtime(http, cityQuery) }
+  ];
+
+  const retryCount = Number.isFinite(Number(config?.realtime_retry_count))
+    ? Number(config.realtime_retry_count)
+    : (Number.isFinite(Number(config?.retry_count)) ? Number(config.retry_count) : 2);
+
+  let tried = new Set();
+  let lastError;
+
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
+    const available = upstreams
+      .filter(u => u.enabled)
+      .filter(u => isRealtimeUpstreamAvailable(u.name))
+      .filter(u => !tried.has(u.name));
+
+    if (available.length === 0) {
+      if (attempt < retryCount) {
+        tried.clear();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+      break;
+    }
+
+    const selected = selectNextRealtimeUpstream(available);
+    if (!selected) break;
+
+    try {
+      const data = await selected.fn();
+      if (data) {
+        markRealtimeUpstreamSuccess(selected.name);
+        return data;
+      }
+      tried.add(selected.name);
+    } catch (e) {
+      lastError = e;
+      markRealtimeUpstreamFailure(selected.name);
+      tried.add(selected.name);
+    }
+  }
+
+  if (lastError) throw lastError;
+  return null;
+}
+
 async function buildRealtime(req, cityQuery) {
   const http = new HttpClient({ timeout: 10000 });
   const now = new Date();
@@ -288,20 +378,11 @@ async function buildRealtime(req, cityQuery) {
   const ip = req.query.ip ? String(req.query.ip) : getClientIp(req);
   const city = pickCityDisplay(cityQuery);
 
-  const providers = [
-    () => fetchBingMsnRealtime(http, cityQuery),
-    () => fetchAmapRealtime(http, cityQuery),
-    () => fetchVmyRealtime(http, cityQuery),
-    () => fetchSuyanRealtime(http, cityQuery)
-  ];
-
   let result = null;
-  for (const fn of providers) {
-    try {
-      result = await fn();
-      if (result) break;
-    } catch {
-    }
+  try {
+    result = await queryRealtimeWithRetry(http, cityQuery);
+  } catch {
+    result = null;
   }
 
   if (!result) {
@@ -392,15 +473,18 @@ async function buildWeek(cityQuery) {
   const city = pickCityDisplay(cityQuery);
 
   const stationId = findIdByTailMatch(cityQuery, cmoIdMap) || findIdByTailMatch(city, cmoIdMap);
-  if (stationId) {
-    const week = await fetchCmaWeek(http, stationId);
-    if (week) return week;
-  }
-
   const sojsonCityId = findIdByTailMatch(cityQuery, cityIdMap) || findIdByTailMatch(city, cityIdMap);
-  if (sojsonCityId) {
-    const week = await fetchSojsonWeek(http, sojsonCityId);
-    if (week) return week;
+
+  const providers = [];
+  if (stationId) providers.push(() => fetchCmaWeek(http, stationId));
+  if (sojsonCityId) providers.push(() => fetchSojsonWeek(http, sojsonCityId));
+
+  for (const fn of providers) {
+    try {
+      const week = await fn();
+      if (Array.isArray(week) && week.length > 0) return week;
+    } catch {
+    }
   }
 
   return null;
@@ -417,10 +501,13 @@ async function resolveCityQuery(req) {
 }
 
 async function buildBoth(req, cityQuery) {
-  const [realtime, week] = await Promise.all([
+  const [realtimeSettled, weekSettled] = await Promise.allSettled([
     buildRealtime(req, cityQuery),
     buildWeek(cityQuery)
   ]);
+
+  const realtime = realtimeSettled.status === 'fulfilled' ? realtimeSettled.value : null;
+  const week = weekSettled.status === 'fulfilled' ? weekSettled.value : null;
   return {
     realtime: realtime || null,
     week: week || []
