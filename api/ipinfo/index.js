@@ -82,27 +82,83 @@ function getNestedValue(obj, path) {
   return keys.reduce((o, k) => (o || {})[k], obj);
 }
 
-function mapResponseToStandardFormat(data, fieldMapping) {
+function getValueByPathParts(obj, parts) {
+  if (!parts || parts.length === 0) return undefined;
+  return parts.reduce((o, k) => (o || {})[k], obj);
+}
+
+function applyFieldTemplate(value, variables) {
+  let out = String(value ?? '');
+  if (!variables) return out;
+  for (const [k, v] of Object.entries(variables)) {
+    out = out.replaceAll(`{${k}}`, v === undefined || v === null ? '' : String(v));
+  }
+  return out;
+}
+
+function resolveFieldValue(data, apiField, variables) {
+  if (apiField === undefined || apiField === null) return undefined;
+  const raw = String(apiField);
+  if (raw.includes(',')) {
+    const fields = raw.split(',');
+    return fields.map(field => resolveFieldValue(data, field.trim(), variables)).filter(v => v).join('');
+  }
+  const directMatch = raw.match(/^\{([\w.-]+)\}$/);
+  if (directMatch) {
+    const name = directMatch[1];
+    if (Object.prototype.hasOwnProperty.call(variables || {}, name)) {
+      return variables[name];
+    }
+  }
+  if (raw.includes('{') && raw.includes('}')) {
+    const parts = raw.split('.').map(part => {
+      const m = part.match(/^\{([\w.-]+)\}$/);
+      if (!m) return part;
+      const key = m[1];
+      if (!Object.prototype.hasOwnProperty.call(variables || {}, key)) return undefined;
+      return variables[key];
+    });
+    if (!parts.some(p => p === undefined)) {
+      const v = getValueByPathParts(data, parts);
+      if (v !== undefined) return v;
+    }
+  }
+  const resolvedPath = applyFieldTemplate(raw, variables);
+  return getNestedValue(data, resolvedPath);
+}
+
+function mapResponseToStandardFormat(data, fieldMapping, variables) {
   const result = {};
   for (const [standardField, apiField] of Object.entries(fieldMapping)) {
-    result[standardField] = getNestedValue(data, apiField);
+    result[standardField] = resolveFieldValue(data, apiField, variables);
   }
   return result;
 }
 
+function getCacheKey(ip) {
+  const ipStr = String(ip || '').trim();
+  const match = ipStr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return ipStr;
+  const parts = match.slice(1).map(Number);
+  if (parts.some(n => Number.isNaN(n) || n < 0 || n > 255)) return ipStr;
+  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+}
+
 function getFromCache(ip) {
-  if (!ipCache.has(ip)) return null;
-  const cacheItem = ipCache.get(ip);
+  const key = getCacheKey(ip);
+  if (!ipCache.has(key)) return null;
+  const cacheItem = ipCache.get(key);
   const now = Date.now();
   if (now - cacheItem.timestamp > config.cache_ttl * 1000) {
-    ipCache.delete(ip);
+    ipCache.delete(key);
     return null;
   }
   return cacheItem.data;
 }
 
 function saveToCache(ip, data) {
-  ipCache.set(ip, {
+  const key = getCacheKey(ip);
+  ipCache.set(key, {
     data,
     timestamp: Date.now()
   });
@@ -116,7 +172,7 @@ async function safeQueryIpInfo(ip, apiConfig) {
   try {
     const url = apiConfig.url.replace('{ip}', ip);
     const response = await axios.get(url, { timeout: config.default_timeout });
-    const standardData = mapResponseToStandardFormat(response.data, apiConfig.field_mapping);
+    const standardData = mapResponseToStandardFormat(response.data, apiConfig.field_mapping, { ip });
     const filteredData = {};
     config.response_fields.forEach(field => {
       if (standardData[field] !== undefined) {

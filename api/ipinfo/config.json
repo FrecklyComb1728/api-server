@@ -24,6 +24,22 @@
   ],
   "upstream_apis": [
     {
+      "name": "bt.cn",
+      "url": "https://www.bt.cn/api/panel/get_ip_info?ip={ip}",
+      "max_requests": 50,
+      "time_window": 60,
+      "enabled": true,
+      "field_mapping": {
+        "ip": "{ip}",
+        "prov": "{ip}.province",
+        "city": "{ip}.city",
+        "country": "{ip}.country",
+        "isp": "{ip}.carrier",
+        "lon": "{ip}.longitude",
+        "lat": "{ip}.latitude"
+      }
+    },
+    {
       "name": "ip9",
       "url": "https://ip9.com.cn/get?ip={ip}",
       "max_requests": 50,
