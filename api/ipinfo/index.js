@@ -134,7 +134,7 @@ function mapResponseToStandardFormat(data, fieldMapping, variables) {
   }
   return result;
 }
-
+// 缓存一整个D段
 function getCacheKey(ip) {
   const ipStr = String(ip || '').trim();
   const match = ipStr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -153,7 +153,18 @@ function getFromCache(ip) {
     ipCache.delete(key);
     return null;
   }
-  return cacheItem.data;
+  if (!cacheItem.data) return null;
+  const cached = cacheItem.data;
+  if (cached && cached.data) {
+    return {
+      ...cached,
+      data: {
+        ...cached.data,
+        ip
+      }
+    };
+  }
+  return cached;
 }
 
 function saveToCache(ip, data) {
