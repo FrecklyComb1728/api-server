@@ -1,0 +1,7 @@
+{
+  "url": "https://cdn.mfawa.top/image",
+  "cache_ttl": 3600,
+  "upstream_url": "https://picmi.1s.fan/api/images/list",
+  "upstream_path": "/background",
+  "timeout_ms": 10000
+}
