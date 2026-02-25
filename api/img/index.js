@@ -75,12 +75,14 @@ function ttlMs() {
   return v * 1000;
 }
 
-async function refreshCacheIfNeeded() {
-  const now = Date.now();
+function isCacheFresh(now) {
   const ttl = ttlMs();
-  if (cache.items.length > 0 && ttl > 0 && now - cache.fetchedAt < ttl) {
-    return cache;
-  }
+  if (ttl <= 0) return false;
+  if (!cache || !cache.items || cache.items.length === 0) return false;
+  return now - (cache.fetchedAt || 0) < ttl;
+}
+
+function startRefresh() {
   if (inflightRefresh) return inflightRefresh;
 
   inflightRefresh = (async () => {
@@ -121,6 +123,20 @@ async function refreshCacheIfNeeded() {
   return inflightRefresh;
 }
 
+async function getCacheNonBlocking() {
+  const now = Date.now();
+  if (isCacheFresh(now)) return cache;
+
+  if (cache && cache.items && cache.items.length > 0) {
+    startRefresh().catch(() => {});
+    return cache;
+  }
+
+  return startRefresh();
+}
+
+startRefresh().catch(() => {});
+
 function getType(value, defaultValue) {
   const s = String(value ?? '').trim().toLowerCase();
   return s || defaultValue;
@@ -140,7 +156,7 @@ router.get('/', async (req, res) => {
 
   let c = null;
   try {
-    c = await refreshCacheIfNeeded();
+    c = await getCacheNonBlocking();
   } catch (e) {
     if (cache.items.length > 0) c = cache;
     else {
@@ -226,7 +242,7 @@ router.get('/list', async (req, res) => {
 
   let c = null;
   try {
-    c = await refreshCacheIfNeeded();
+    c = await getCacheNonBlocking();
   } catch (e) {
     if (cache.items.length > 0) c = cache;
     else {
