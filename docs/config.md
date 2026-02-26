@@ -30,6 +30,10 @@
     "timeWindow": 60,
     "maxRequests": 100,
     "ipHeader": "X-Forwarded-For"
+  },
+  "cluster": {
+    "enabled": true,
+    "workers": 0
   }
 }
 ```
@@ -63,6 +67,13 @@
 - `rateLimit.maxRequests`：窗口内最大请求数，设为 `0` 表示不限制
 - `rateLimit.ipHeader`：用于识别客户端 IP 的请求头
 
+### 多进程 / 多核心
+
+- `cluster.enabled`：是否启用 Node.js `cluster` 多进程模式；开启后会按 `workers` 数量 fork 多个 worker 进程处理请求。
+- `cluster.workers`：
+  - `0`：自动使用 `os.cpus().length`（即按 CPU 核心数创建 worker）
+  - `>0`：使用指定数量的 worker 进程
+
 ## HTML 模板变量
 
 当返回 `.html` 文件时会替换以下变量：
@@ -74,4 +85,3 @@
 ## 生效方式
 
 修改 `server-config.json` 后需要重启进程生效。
-

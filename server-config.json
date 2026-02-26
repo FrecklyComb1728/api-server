@@ -23,5 +23,9 @@
     "timeWindow": 60,
     "maxRequests": 100,
     "ipHeader": "X-Forwarded-For"
+  },
+  "cluster": {
+    "enabled": true,
+    "workers": 2
   }
 }

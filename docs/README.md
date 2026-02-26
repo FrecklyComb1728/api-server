@@ -23,6 +23,7 @@ pnpm dev
 - 插件：[plugin.md](plugin.md)
 - IP 查询：[ip.md](ip.md)
 - 天气预报：[weather.md](weather.md)
+- 随机图片：[img.md](img.md)
 
 ## 已实现 API
 
