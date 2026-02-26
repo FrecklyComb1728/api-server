@@ -26,6 +26,6 @@
   },
   "cluster": {
     "enabled": true,
-    "workers": 2
+    "workers": 0
   }
 }
