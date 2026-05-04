@@ -78,13 +78,12 @@ function getNestedValue(obj, path) {
     const fields = path.split(',');
     return fields.map(field => getNestedValue(obj, field.trim())).filter(v => v).join('');
   }
-  const keys = path.split('.');
-  return keys.reduce((o, k) => (o || {})[k], obj);
-}
-
-function getValueByPathParts(obj, parts) {
+  const parts = path.split('.');
   if (!parts || parts.length === 0) return undefined;
-  return parts.reduce((o, k) => (o || {})[k], obj);
+  return parts.reduce((o, k) => {
+    if (o === null || o === undefined || typeof o !== 'object') return undefined;
+    return o[k];
+  }, obj);
 }
 
 function applyFieldTemplate(value, variables) {
@@ -119,7 +118,7 @@ function resolveFieldValue(data, apiField, variables) {
       return variables[key];
     });
     if (!parts.some(p => p === undefined)) {
-      const v = getValueByPathParts(data, parts);
+      const v = getNestedValue(data, parts.join('.'));
       if (v !== undefined) return v;
     }
   }
@@ -215,15 +214,15 @@ async function queryIpInfoWithRetry(ip) {
   }
   let result;
   let lastError;
-  let retryCount = 0;
+  let retryRound = 0;
   let triedApis = new Set();
-  while (retryCount <= config.retry_count) {
+  while (retryRound <= config.retry_count) {
     availableApis = getAvailableApis().filter(api => !triedApis.has(api.name));
     if (availableApis.length === 0) {
-      if (retryCount < config.retry_count) {
+      if (retryRound < config.retry_count) {
         triedApis.clear();
         availableApis = getAvailableApis();
-        retryCount++;
+        retryRound++;
         await new Promise(resolve => setTimeout(resolve, 100));
       } else {
         break;
@@ -269,8 +268,7 @@ function getClientIp(req) {
     ];
   }
   for (const header of ipHeaders) {
-    const headerName = header.name.toLowerCase();
-    const headerValue = req.headers[headerName];
+    const headerValue = req.get(header.name);
     if (headerValue) {
       const ips = headerValue.split(',').map(ip => ip.trim()).filter(ip => ip);
       if (ips.length > 0) {
@@ -283,9 +281,9 @@ function getClientIp(req) {
 }
 
 async function handleIpQuery(ip, res) {
-  const normalizedIp = String(ip || '').trim().toLowerCase();
+  const normalizedIp = String(ip || '').trim();
   try {
-    const result = await queryIpInfoWithRetry(ip);
+    const result = await queryIpInfoWithRetry(normalizedIp);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -310,3 +308,11 @@ router.get('/:ip', async (req, res) => {
 module.exports = router;
 module.exports.queryIpInfoWithRetry = queryIpInfoWithRetry;
 module.exports.getClientIp = getClientIp;
+module.exports.meta = {
+  name: 'IP 信息',
+  description: '多上游容灾，自动重试',
+  endpoints: [
+    { method: 'GET', path: '/', description: '查询当前 IP', params: '?ip=x.x.x.x' },
+    { method: 'GET', path: '/:ip', description: '查询指定 IP', params: '路径参数' }
+  ]
+};

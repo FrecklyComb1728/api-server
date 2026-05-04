@@ -2,15 +2,15 @@
   "projectName": "API Server",
   "port": 8633,
   "staticDir": "public",
-  "apiDir": "api",
+  "apiDir": "v1",
   "index": {
-    "templatePath": "public/html/index.html"
+    "templatePath": "template/index.html"
   },
   "error": {
-    "templatePath": "public/html/error.html"
+    "templatePath": "template/error.html"
   },
   "markdown": {
-    "templatePath": "public/html/markdown.html"
+    "templatePath": "template/markdown.html"
   },
   "log": {
     "enableFile": true,

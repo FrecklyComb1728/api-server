@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const configPath = path.join(process.cwd(), 'server-config.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+const config = require('./configLoader');
 const { marked } = require('marked');
 const { sendError } = require('./errorHandler');
 
@@ -24,10 +23,12 @@ class MarkdownRenderer {
     const htmlContent = marked.parse(markdownContent);
     const template = this.loadTemplate();
     const title = fileName;
+    const year = new Date().getFullYear();
     const result = template
-      .replace('${projectName}', config.projectName)
-      .replace('${title}', title)
-      .replace('${htmlContent}', htmlContent);
+      .replace(/\$\{projectName\}/g, config.projectName)
+      .replace(/\$\{title\}/g, title)
+      .replace(/\$\{htmlContent\}/g, htmlContent)
+      .replace(/\$\{year\}/g, year);
 
     return result;
   }

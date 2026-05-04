@@ -5,14 +5,14 @@
 ## 接口列表
 
 ### 1. 查询 IP 信息
-- **路径**: `GET /api/ipinfo`
+- **路径**: `GET /v1/ipinfo`
 - **说明**: 查询指定 IP 或当前请求来源 IP 的详细信息。
 - **参数**:
     - `ip` (Query 或 Path, 可选): 要查询的 IP 地址。若不提供，则查询当前请求的来源 IP。
 - **示例**:
-    - `GET /api/ipinfo?ip=1.1.1.1`
-    - `GET /api/ipinfo/1.1.1.1`
-    - `GET /api/ipinfo`
+    - `GET /v1/ipinfo?ip=1.1.1.1`
+    - `GET /v1/ipinfo/1.1.1.1`
+    - `GET /v1/ipinfo`
 
 ## 响应结构
 
@@ -20,14 +20,14 @@
 {
   "source": "ip9",
   "data": {
-    "ip": "1.2.4.8",
-    "country": "中国",
-    "prov": "北京市",
-    "city": "海淀区",
+    "ip": "1.1.1.1",
+    "country": "澳大利亚",
+    "prov": "昆士兰州",
+    "city": "布里斯班",
     "district": "",
-    "isp": "中国互联网络信息中心",
-    "lon": "113.722",
-    "lat": "34.7732"
+    "isp": "APNIC",
+    "lon": "153.021072",
+    "lat": "-27.470125"
   },
   "raw_data": { ... }
 }

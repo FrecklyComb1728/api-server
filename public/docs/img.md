@@ -1,4 +1,4 @@
-# 随机图片接口（/api/img）
+# 随机图片接口（/v1/img）
 
 提供基于上游列表的随机图片分发与列表查询能力，并支持 302 跳转、纯文本 URL、JSON 数据以及直接输出图片流。
 
@@ -6,13 +6,13 @@
 
 ### 1. 随机图片
 
-- **路径**：`GET /api/img`
+- **路径**：`GET /v1/img`
 - **说明**：从缓存的图片列表中随机选择一张；默认根据 `User-Agent` 自动选择横屏或竖屏图片源。
 - **相关路径**：
-  - `GET /api/img`：根据 `User-Agent` 自动选择（默认）
-  - `GET /api/img/ua`：根据 `User-Agent` 自动选择
-  - `GET /api/img/h`：强制横屏
-  - `GET /api/img/v`：强制竖屏
+  - `GET /v1/img`：根据 `User-Agent` 自动选择（默认）
+  - `GET /v1/img/ua`：根据 `User-Agent` 自动选择
+  - `GET /v1/img/h`：强制横屏
+  - `GET /v1/img/v`：强制竖屏
 - **通用参数**：
   - `type` (可选)：返回格式
     - `302`（默认）：302 重定向到随机图片 URL
@@ -23,8 +23,8 @@
 #### 1.1 302 重定向（默认）
 
 - **请求**：
-  - `GET /api/img`
-  - 或显式指定：`GET /api/img?type=302`
+  - `GET /v1/img`
+  - 或显式指定：`GET /v1/img?type=302`
 - **行为**：
   - 返回 `302 Found`
   - 响应头 `Location` 为随机图片的完整 URL，例如：
@@ -33,7 +33,7 @@
 #### 1.2 纯文本 URL
 
 - **请求**：
-  - `GET /api/img?type=text`
+  - `GET /v1/img?type=text`
 - **响应**：
   - `Content-Type: text/plain; charset=utf-8`
   - 响应体为一行文本，即随机图片完整 URL：
@@ -45,7 +45,7 @@ https://cdn.mfawa.top/image/background/100066591_p0.png
 #### 1.3 JSON 格式
 
 - **请求**：
-  - `GET /api/img?type=json`
+  - `GET /v1/img?type=json`
 - **响应结构**：
 
 ```json
@@ -75,19 +75,19 @@ https://cdn.mfawa.top/image/background/100066591_p0.png
 #### 1.4 直接输出图片流
 
 - **请求**：
-  - `GET /api/img?type=img`
+  - `GET /v1/img?type=img`
 - **行为**：
   - 在后端内部对随机图片 URL 发起请求，并将响应流式转发给客户端。
   - 响应头中的 `Content-Type` 等信息（如 `image/png`、`image/jpeg`）会尽量保持与上游一致。
 
 ## 2. 图片列表
 
-- **路径**：`GET /api/img/list`
+- **路径**：`GET /v1/img/list`
 - **说明**：返回全部图片的列表，可选纯文本或 JSON；默认根据 `User-Agent` 自动选择横屏或竖屏图片源。
 - **相关路径**：
-  - `GET /api/img/list`：根据 `User-Agent` 自动选择（默认）
-  - `GET /api/img/list/h`：强制横屏列表
-  - `GET /api/img/list/v`：强制竖屏列表
+  - `GET /v1/img/list`：根据 `User-Agent` 自动选择（默认）
+  - `GET /v1/img/list/h`：强制横屏列表
+  - `GET /v1/img/list/v`：强制竖屏列表
 - **参数**：
   - `type` (Query，可选)：
     - `json`（默认）：返回 JSON 列表
@@ -96,7 +96,7 @@ https://cdn.mfawa.top/image/background/100066591_p0.png
 ### 2.1 JSON 列表
 
 - **请求**：
-  - `GET /api/img/list` 或 `GET /api/img/list?type=json`
+  - `GET /v1/img/list` 或 `GET /v1/img/list?type=json`
 - **响应示例**：
 
 ```json
@@ -135,7 +135,7 @@ https://cdn.mfawa.top/image/background/100066591_p0.png
 ### 2.2 纯文本列表
 
 - **请求**：
-  - `GET /api/img/list?type=text`
+  - `GET /v1/img/list?type=text`
 - **响应**：
   - `Content-Type: text/plain; charset=utf-8`
   - 每行一个完整 URL，形如：
@@ -188,7 +188,7 @@ https://cdn.mfawa.top/image/background/100339220_p0.jpg
 
 ## HTTP 缓存控制
 
-所有 `/api/img` 相关接口都会统一返回如下响应头，用于禁用中间层缓存：
+所有 `/v1/img` 相关接口都会统一返回如下响应头，用于禁用中间层缓存：
 
 ```text
 Cache-Control: no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate

@@ -1,6 +1,6 @@
-const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const config = require('../utils/configLoader');
 const corsMiddleware = require('../utils/corsHandler');
 const urlDecoderMiddleware = require('../utils/urlDecoder');
 const Logger = require('../utils/logger');
@@ -11,8 +11,6 @@ const { setupStaticRoutes } = require('../utils/staticServer');
 const { MarkdownRenderer } = require('../utils/markdownRenderer');
 
 function createApp() {
-  const configPath = path.join(process.cwd(), 'server-config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
   const app = express();
 
@@ -28,13 +26,13 @@ function createApp() {
 
   loadApis(app, config);
 
-  const markdownTemplate = path.join(process.cwd(), config.markdown.templatePath);
+  const markdownTemplate = path.join(process.cwd(), config?.markdown?.templatePath || 'template/markdown.html');
   const renderer = new MarkdownRenderer(markdownTemplate);
   setupStaticRoutes(app, config, renderer);
 
   app.use(errorHandlerMiddleware);
 
-  return app;
+  return { app, limiter };
 }
 
 module.exports = createApp;

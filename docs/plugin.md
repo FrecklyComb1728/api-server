@@ -1,62 +1,87 @@
-# 插件
+# 插件开发规范
 
-系统会在启动时扫描 `api/` 目录下的子目录：只要目录内存在 `index.js`，就会自动挂载到 `/api/{目录名}`。
+系统启动时扫描 `v1/` 目录下的子目录，存在 `index.js` 的目录会自动挂载到 `/v1/{目录名}`。
 
-## 规则
+## 目录结构
 
-- 目录：`api/{name}/`
-- 入口：`api/{name}/index.js`
-- 挂载：`/api/{name}`
-- 导出：必须导出一个 `express.Router()`
+```
+v1/
+  your-plugin/
+    index.js      # 入口文件（必须）
+    config.json   # 配置文件（可选）
+```
 
-## 示例
-
-创建 `api/hello/index.js`：
+## 最小示例
 
 ```js
 const express = require('express');
-
 const router = express.Router();
 
 router.get('/', (req, res) => {
-  const name = req.query.name ? String(req.query.name) : 'World';
-  res.json({
-    success: true,
-    data: {
-      message: `Hello, ${name}`
-    }
-  });
+  res.json({ success: true, data: { message: 'Hello' } });
 });
 
 module.exports = router;
 ```
 
-访问：
+访问：`GET /v1/your-plugin`
 
-- `GET /api/hello`
-- `GET /api/hello?name=mifeng`
+## meta 导出
 
-## 请求与中间件
+导出 `meta` 对象后，插件会自动出现在首页端点列表中。
 
-- JSON 请求体：已启用（`core/app.js:19`）
-- URL 解码：已启用（`core/app.js:16`）
-- CORS：已启用（`core/app.js:17`）
-- 访问日志与限流：全局生效（`core/app.js:22`、`core/app.js:25`）
+```js
+const express = require('express');
+const router = express.Router();
 
-## 常用做法
+router.get('/', (req, res) => {
+  res.json({ success: true });
+});
 
-### 读取同目录配置
+router.get('/:id', (req, res) => {
+  res.json({ success: true, id: req.params.id });
+});
+
+module.exports = router;
+
+module.exports.meta = {
+  name: '示例插件',
+  description: '插件功能说明',
+  endpoints: [
+    { method: 'GET', path: '/', description: '首页', params: '' },
+    { method: 'GET', path: '/:id', description: '详情', params: '路径参数' }
+  ]
+};
+```
+
+### meta 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| name | string | 显示名称 |
+| description | string | 简短描述 |
+| endpoints | array | 端点列表 |
+
+### endpoint 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| method | string | HTTP 方法（GET/POST/PUT/DELETE） |
+| path | string | 相对于模块的路径 |
+| description | string | 端点说明 |
+| params | string | 参数说明 |
+
+## 读取配置
 
 ```js
 const path = require('path');
-
 const config = require(path.join(__dirname, 'config.json'));
 ```
 
-### 处理错误
+## 错误处理
 
 ```js
-router.get('/demo', (req, res) => {
+router.get('/', (req, res) => {
   if (!req.query.id) {
     return res.status(400).json({ success: false, message: '缺少 id' });
   }
@@ -64,7 +89,30 @@ router.get('/demo', (req, res) => {
 });
 ```
 
-## 生效方式
+## 返回格式
 
-新增或删除插件需要重启进程；使用 `pnpm dev` 时，Node 会在文件变化后自动重启。
+建议统一返回格式：
 
+```js
+// 成功
+{ success: true, data: { ... } }
+
+// 失败
+{ success: false, message: '错误信息' }
+```
+
+## 已启用的中间件
+
+- JSON 请求体解析
+- URL 解码
+- CORS
+- 访问日志
+- 限流
+
+无需在插件中重复配置。
+
+## 注意事项
+
+- 新增或删除插件需要重启进程
+- 使用 `pnpm dev` 时文件变化会自动重启
+- 元数据中的 `path` 不需要包含模块前缀，系统会自动拼接 `/v1/{模块名}`

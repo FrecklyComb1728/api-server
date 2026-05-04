@@ -1,6 +1,6 @@
 # API Server
 
-一个基于 Nodejs 的 API Server：自动加载 `api/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问
+一个基于 Nodejs 的 API Server：自动加载 `v1/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问
 
 ## 运行
 

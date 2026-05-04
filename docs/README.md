@@ -1,6 +1,6 @@
 # API Server
 
-这是一个基于 Express 的 API 中转服务：自动加载 `api/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问。
+这是一个基于 Express 的 API 中转服务：自动加载 `v1/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问。
 
 ## 运行
 
@@ -25,72 +25,3 @@ pnpm dev
 - 天气预报：[weather.md](weather.md)
 - 随机图片：[img.md](img.md)
 
-## 已实现 API
-
-### IP 查询
-
-- `GET /api/ip`（等价于 `/api/ipinfo`）
-- `GET /api/ip?ip={ip}`
-- `GET /api/ip/{ip}`
-
-返回为统一结构：
-
-```json
-{
-  "source": "ip9",
-  "data": {
-    "ip": "1.2.3.4",
-    "city": "...",
-    "country": "...",
-    "isp": "..."
-  },
-  "raw_data": {}
-}
-```
-
-### 天气
-
-三个入口返回同一结构，且 `realtime` 在上、`week` 在下：
-
-- `GET /api/weather?city={城市}`
-- `GET /api/weather/realtime?city={城市}`
-- `GET /api/weather/week?city={城市}`
-
-也支持通过 IP 推断城市：
-
-- `GET /api/weather?ip={ip}`
-- `GET /api/weather`（默认使用请求来源 IP）
-
-返回结构：
-
-```json
-{
-  "success": true,
-  "data": {
-    "realtime": {
-      "ip": "1.2.3.4",
-      "city": "北京",
-      "high": "3",
-      "low": "3",
-      "temperature": "3",
-      "weather": "阴",
-      "wind": "西北风",
-      "windSpeed": "3级",
-      "visibility": "30km",
-      "humidity": "44%",
-      "time": "04:13:49",
-      "date": "2025/12/20"
-    },
-    "week": [
-      {
-        "date": "2025/12/20",
-        "wind": "北风",
-        "windSpeed": "微风",
-        "weather": "中雨转小雨",
-        "temperature": "9℃",
-        "week": "星期六"
-      }
-    ]
-  }
-}
-```

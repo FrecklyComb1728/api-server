@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const configPath = path.join(process.cwd(), 'server-config.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+const config = require('./configLoader');
 
 const errorMessages = {
   400: {
@@ -36,6 +35,10 @@ const errorMessages = {
     message: '网关错误',
     description: '抱歉，服务器收到了无效响应'
   },
+  429: {
+    message: '请求过于频繁',
+    description: '抱歉，您的请求过于频繁，请稍后重试'
+  },
   503: {
     message: '服务暂不可用',
     description: '抱歉，服务器暂时无法处理请求'
@@ -44,15 +47,15 @@ const errorMessages = {
 
 function sendError(res, statusCode) {
   const errorInfo = errorMessages[statusCode] || errorMessages[500];
-  const templatePath = path.join(process.cwd(), config.error.templatePath);
+  const templatePath = path.join(process.cwd(), config?.error?.templatePath || 'template/error.html');
 
   try {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template
-      .replace(/\$\{projectName\}/g, config.projectName)
-      .replace(/\$\{code\}/g, statusCode)
-      .replace(/\$\{message\}/g, errorInfo.message)
-      .replace(/\$\{description\}/g, errorInfo.description);
+      .replace(/\$\{projectName\}/g, () => config.projectName)
+      .replace(/\$\{code\}/g, () => statusCode)
+      .replace(/\$\{message\}/g, () => errorInfo.message)
+      .replace(/\$\{description\}/g, () => errorInfo.description);
 
     res.status(statusCode).send(html);
   } catch (error) {
