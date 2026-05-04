@@ -24,13 +24,13 @@ class HttpClient {
       err.statusCode = error.response.status;
       err.data = error.response.data;
       return err;
-    } else if (error.request) {
-      const err = new Error('未收到来自服务器的响应');
-      err.code = 'ECONNREFUSED';
-      return err;
     } else if (error.code === 'ECONNABORTED') {
       const err = new Error('请求超时');
       err.code = 'TIMEOUT';
+      return err;
+    } else if (error.request) {
+      const err = new Error('未收到来自服务器的响应');
+      err.code = 'ECONNREFUSED';
       return err;
     } else {
       return error;
@@ -38,24 +38,16 @@ class HttpClient {
   }
 
   async get(url, params = {}, config = {}) {
-    try {
-      const response = await this.axios.get(url, {
-        params,
-        ...config
-      });
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+    const response = await this.axios.get(url, {
+      params,
+      ...config
+    });
+    return response.data;
   }
 
   async post(url, data = {}, config = {}) {
-    try {
-      const response = await this.axios.post(url, data, config);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+    const response = await this.axios.post(url, data, config);
+    return response.data;
   }
 }
 

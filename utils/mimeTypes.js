@@ -1,3 +1,5 @@
+const path = require('path');
+
 const mimeTypes = {
   '.html': 'text/html',
   '.css': 'text/css',
@@ -33,7 +35,6 @@ const mimeTypes = {
 };
 
 function getMimeType(filePath) {
-  const path = require('path');
   const ext = path.extname(filePath).toLowerCase();
   return mimeTypes[ext] || 'application/octet-stream';
 }

@@ -1,5 +1,4 @@
 const express = require('express');
-const axios = require('axios');
 const path = require('path');
 const HttpClient = require('../../utils/httpClient');
 
@@ -13,6 +12,22 @@ const caches = {
   vertical: { items: [], urls: [], fetchedAt: 0, baseUrl: '' }
 };
 const inflights = { horizontal: null, vertical: null };
+
+const cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  const ttl = ttlMs();
+  if (ttl <= 0) return;
+  for (const key of Object.keys(caches)) {
+    const c = caches[key];
+    if (c && c.items && c.items.length > 0 && now - (c.fetchedAt || 0) >= ttl) {
+      caches[key] = { items: [], urls: [], fetchedAt: 0, baseUrl: '' };
+    }
+  }
+}, 60000);
+
+function destroyCacheCleanup() {
+  if (cleanupInterval) clearInterval(cleanupInterval);
+}
 
 router.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate');
@@ -257,7 +272,7 @@ async function sendRandom(req, res, mode) {
   if (type === 'img') {
     try {
       const timeout = Number(config?.timeout_ms) || 10000;
-      const r = await axios.get(fullUrl, {
+      const r = await http.axios.get(fullUrl, {
         responseType: 'stream',
         timeout,
         headers: {
@@ -278,6 +293,7 @@ async function sendRandom(req, res, mode) {
       if (r.headers && r.headers['etag']) res.set('ETag', String(r.headers['etag']));
 
       r.data.on('error', e => {
+        console.error('[图片] 流式传输错误:', e?.message || e);
         if (!res.headersSent) res.status(502).end(String(e?.message || e));
         else res.end();
       });
@@ -340,3 +356,16 @@ router.get('/list/h', (req, res) => sendList(req, res, 'horizontal'));
 router.get('/list/v', (req, res) => sendList(req, res, 'vertical'));
 
 module.exports = router;
+module.exports.destroyCacheCleanup = destroyCacheCleanup;
+module.exports.meta = {
+  name: '随机图片',
+  description: '上游聚合，UA 自适应',
+  endpoints: [
+    { method: 'GET', path: '/', description: 'UA 自适应', params: 'type=302|json|text|img' },
+    { method: 'GET', path: '/h', description: '横屏', params: 'type=302|json|text|img' },
+    { method: 'GET', path: '/v', description: '竖屏', params: 'type=302|json|text|img' },
+    { method: 'GET', path: '/list', description: '图片列表', params: 'type=json|text' },
+    { method: 'GET', path: '/list/h', description: '横屏列表', params: 'type=json|text' },
+    { method: 'GET', path: '/list/v', description: '竖屏列表', params: 'type=json|text' }
+  ]
+};

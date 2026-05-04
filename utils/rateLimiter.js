@@ -1,12 +1,14 @@
+const config = require('./configLoader');
 const { sendError } = require('./errorHandler');
 
 class RateLimiter {
-  constructor(config) {
-    this.enabled = config.enabled !== false;
-    this.timeWindow = config.timeWindow || 60;
-    this.maxRequests = config.maxRequests || 100;
-    this.ipHeader = config.ipHeader === undefined ? 'X-Forwarded-For' : config.ipHeader;
+  constructor(rateLimitConfig) {
+    this.enabled = rateLimitConfig.enabled !== false;
+    this.timeWindow = rateLimitConfig.timeWindow || 60;
+    this.maxRequests = rateLimitConfig.maxRequests || 100;
+    this.ipHeader = rateLimitConfig.ipHeader === undefined ? 'X-Forwarded-For' : rateLimitConfig.ipHeader;
     this.ipRecords = new Map();
+    this.apiPrefix = `/${config.apiDir || 'v1'}`;
 
     this.cleanupInterval = setInterval(() => {
       this.cleanup();
@@ -90,7 +92,10 @@ class RateLimiter {
       const ip = this.getClientIP(req);
 
       if (this.isRateLimited(ip)) {
-        return sendError(res, 403);
+        if (req.path.startsWith(this.apiPrefix)) {
+          return res.status(429).json({ status: 'error', time: Date.now(), message: '请求过于频繁，请稍后重试' });
+        }
+        return sendError(res, 429);
       }
 
       this.recordRequest(ip);

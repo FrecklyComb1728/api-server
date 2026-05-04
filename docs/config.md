@@ -9,15 +9,15 @@
   "projectName": "API Server",
   "port": 8633,
   "staticDir": "public",
-  "apiDir": "api",
+  "apiDir": "v1",
   "index": {
-    "templatePath": "public/html/index.html"
+    "templatePath": "template/index.html"
   },
   "error": {
-    "templatePath": "public/html/error.html"
+    "templatePath": "template/error.html"
   },
   "markdown": {
-    "templatePath": "public/html/markdown.html"
+    "templatePath": "template/markdown.html"
   },
   "log": {
     "enableFile": true,
@@ -45,7 +45,7 @@
 - `projectName`：站点标题与部分模板变量
 - `port`：监听端口
 - `staticDir`：静态资源根目录（例如 `public/`）
-- `apiDir`：API 模块根目录（例如 `api/`）
+- `apiDir`：API 模块根目录（例如 `v1`）
 
 ### 页面
 

@@ -58,20 +58,17 @@ function findFirstExistingPath(candidates) {
 }
 
 const configPath = findFirstExistingPath([
-  path.join(__dirname, 'config.json'),
-  path.join(process.cwd(), 'temp', 'api', 'weather', 'config.json')
+  path.join(__dirname, 'config.json')
 ]);
 
 const config = configPath ? readJsonFile(configPath) : {};
 
 const cityIdPath = findFirstExistingPath([
-  path.join(__dirname, 'week', 'city_id.json'),
-  path.join(process.cwd(), 'temp', 'api', 'weather', 'week', 'city_id.json')
+  path.join(__dirname, 'week', 'city_id.json')
 ]);
 
 const cmoIdPath = findFirstExistingPath([
-  path.join(__dirname, 'week', 'cmo_id.json'),
-  path.join(process.cwd(), 'temp', 'api', 'weather', 'week', 'cmo_id.json')
+  path.join(__dirname, 'week', 'cmo_id.json')
 ]);
 
 const cityIdList = cityIdPath ? readJsonFile(cityIdPath) : [];
@@ -149,6 +146,7 @@ function applyTemplate(url, values) {
 }
 
 let lastVmyRequestAt = 0;
+// cluster 模式下各 Worker 独立计时，多 Worker 实际节流间隔为 1000ms / N
 async function throttleVmy() {
   const now = Date.now();
   const wait = Math.max(0, 1000 - (now - lastVmyRequestAt));
@@ -258,12 +256,7 @@ async function fetchAmapRealtime(http, cityQuery) {
   };
 }
 
-async function fetchVmyRealtime(http, cityQuery) {
-  if (!config?.vmy?.enabled) return null;
-  await throttleVmy();
-  const url = applyTemplate(config.vmy.url, { city: encodeURIComponent(cityQuery) });
-  const data = await http.get(url);
-
+function extractVmyData(data) {
   const current = data?.data?.current || data?.current || data?.data || null;
   const city = data?.data?.city || data?.city || current?.city || '';
   const temperature = digitsOnly(current?.temp ?? current?.wendu ?? current?.temperature ?? data?.data?.wendu);
@@ -287,6 +280,14 @@ async function fetchVmyRealtime(http, cityQuery) {
     visibility,
     humidity
   };
+}
+
+async function fetchVmyRealtime(http, cityQuery) {
+  if (!config?.vmy?.enabled) return null;
+  await throttleVmy();
+  const url = applyTemplate(config.vmy.url, { city: encodeURIComponent(cityQuery) });
+  const data = await http.get(url);
+  return extractVmyData(data);
 }
 
 async function fetchSuyanRealtime(http, cityQuery) {
@@ -381,7 +382,8 @@ async function buildRealtime(req, cityQuery) {
   let result = null;
   try {
     result = await queryRealtimeWithRetry(http, cityQuery);
-  } catch {
+  } catch (e) {
+    console.error('[天气] 实时天气查询失败:', e?.message || e);
     result = null;
   }
 
@@ -563,4 +565,13 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.meta = {
+  name: '天气',
+  description: 'IP 定位，实时 + 7 天',
+  endpoints: [
+    { method: 'GET', path: '/', description: '实时 + 7 天', params: '?city=深圳' },
+    { method: 'GET', path: '/realtime', description: '仅实时', params: '?city=深圳' },
+    { method: 'GET', path: '/week', description: '仅 7 天', params: '?city=深圳' }
+  ]
+};
 

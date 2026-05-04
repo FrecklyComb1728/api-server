@@ -5,22 +5,22 @@
 ## 接口列表
 
 ### 1. 综合天气查询
-- **路径**: `GET /api/weather`
+- **路径**: `GET /v1/weather`
 - **说明**: 同时返回实时天气 (`realtime`) 和 7 天预报 (`week`)。
 - **参数**:
     - `city` (Query, 可选): 城市名称（如：北京）。
     - `ip` (Query, 可选): 根据 IP 自动推断城市。
-- **示例**: `GET /api/weather?city=北京`
+- **示例**: `GET /v1/weather?city=北京`
 
 ### 2. 实时天气
-- **路径**: `GET /api/weather/realtime`
+- **路径**: `GET /v1/weather/realtime`
 - **说明**: 仅返回实时天气数据。
-- **示例**: `GET /api/weather/realtime?city=北京`
+- **示例**: `GET /v1/weather/realtime?city=北京`
 
 ### 3. 7天预报
-- **路径**: `GET /api/weather/week`
+- **路径**: `GET /v1/weather/week`
 - **说明**: 仅返回 7 天天气预报。
-- **示例**: `GET /api/weather/week?city=北京`
+- **示例**: `GET /v1/weather/week?city=北京`
 
 ## 响应结构
 
