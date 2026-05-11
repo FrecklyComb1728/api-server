@@ -1,4 +1,5 @@
 /temp
 /node_modules
-.vscode/settings.json
-access.log
+logs/access.log
+server-config.json
+webhook.json
