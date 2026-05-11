@@ -1,94 +1,67 @@
 # API Server
 
-一个基于 Nodejs 的 API Server：自动加载 `v1/` 目录下的模块，并同时提供静态资源与 Markdown 文档访问
+基于 Express 的 API 聚合服务，自动加载 `v1/` 目录下的模块，同时提供静态资源与 Markdown 文档渲染。
 
-## 运行
+## 快速开始
 
 ```bash
 pnpm install
-pnpm start
-```
-
-开发模式：
-
-```bash
 pnpm dev
 ```
 
-启动后访问：`http://localhost:8633/`
+访问 `http://localhost:8633/`
+
+## 内置模块
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 随机图片 | `/v1/img` | 横/竖屏自适应，302/json/text/img |
+| IP 查询 | `/v1/ipinfo` | 多上游容灾，自动重试 + 负载均衡 |
+| 天气 | `/v1/weather` | IP 定位城市，实时 + 7 天预报 |
+
+查看所有端点：`GET /v1/meta`
+
+## 项目结构
+
+```
+server.js            # 入口（内置 cluster / PM2 自适应）
+core/
+  app.js             # Express 应用创建
+  apiLoader.js       # 自动加载 v1/ 模块 + /v1/meta 接口
+utils/
+  configLoader.js    # 统一配置加载
+  staticServer.js    # 静态资源 / Markdown 路由
+  markdownRenderer.js  # Markdown → HTML
+  errorHandler.js    # 错误页面渲染
+  rateLimiter.js     # IP 滑动窗口限流
+  logger.js          # 访问日志
+  httpClient.js      # axios 封装
+  corsHandler.js     # CORS
+  urlDecoder.js      # URL 解码
+  mimeTypes.js       # MIME 映射
+v1/
+  img/               # 随机图片模块
+  ipinfo/            # IP 信息模块
+  weather/           # 天气模块
+template/
+  index.html         # 首页（动态加载 API 端点）
+  error.html         # 错误页
+  markdown.html      # Markdown 文档渲染模板
+ecosystem.config.js  # PM2 零停机部署配置
+deploy.sh            # Webhook 部署脚本
+```
+
+## 技术栈
+
+- Express 4 + axios + marked
+- 内置 Node.js cluster 多进程（PM2 环境下自动适配）
+- 模板变量替换（`${projectName}` 等，见 [配置文档](docs/config.md)）
 
 ## 文档
 
-- 配置：[docs/config.md](docs/config.md)
-- 插件：[docs/plugin.md](docs/plugin.md)
-
-## 已实现 API
-
-### IP 查询
-
-- `GET /api/ipinfo`
-- `GET /api/ipinfo?ip={ip}`
-- `GET /api/ipinfo/{ip}`
-
-返回为统一结构：
-
-```json
-{
-  "source": "ip9",
-  "data": {
-    "ip": "1.2.3.4",
-    "city": "...",
-    "country": "...",
-    "isp": "..."
-  },
-  "raw_data": {}
-}
-```
-
-### 天气
-
-三个入口返回同一结构，且 `realtime` 在上、`week` 在下：
-
-- `GET /api/weather?city={城市}`
-- `GET /api/weather/realtime?city={城市}`
-- `GET /api/weather/week?city={城市}`
-
-也支持通过 IP 推断城市：
-
-- `GET /api/weather?ip={ip}`
-- `GET /api/weather`（默认使用请求来源 IP）
-
-返回结构：
-
-```json
-{
-  "success": true,
-  "data": {
-    "realtime": {
-      "ip": "1.2.3.4",
-      "city": "北京",
-      "high": "3",
-      "low": "3",
-      "temperature": "3",
-      "weather": "阴",
-      "wind": "西北风",
-      "windSpeed": "3级",
-      "visibility": "30km",
-      "humidity": "44%",
-      "time": "04:13:49",
-      "date": "2025/12/20"
-    },
-    "week": [
-      {
-        "date": "2025/12/20",
-        "wind": "北风",
-        "windSpeed": "微风",
-        "weather": "中雨转小雨",
-        "temperature": "9℃",
-        "week": "星期六"
-      }
-    ]
-  }
-}
-```
-
+- [配置](docs/config.md)
+- [插件开发](docs/plugin.md)
+- [CI/CD 部署](docs/cicd.md)
+- [IP 查询](docs/ip.md)
+- [天气](docs/weather.md)
+- [随机图片](docs/img.md)
