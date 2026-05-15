@@ -32,7 +32,6 @@ sudo chmod +x /usr/local/bin/webhook
 ```bash
 cd /opt
 git clone https://github.com/FrecklyComb1728/api-server.git
-sudo chown -R webhook-deploy:webhook-deploy /opt/api-server
 cd api-server
 
 # 从示例文件创建实际配置
@@ -57,7 +56,6 @@ pm2 startup  # 配置开机自启
 设置权限：
 ```bash
 chmod +x /opt/api-server/deploy.sh
-chown webhook-deploy:webhook-deploy /opt/api-server/deploy.sh
 ```
 
 ### 4. Webhook 配置
