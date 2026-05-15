@@ -42,7 +42,8 @@ function serveFile(res, filePath) {
         .replace(/\$\{logStatus\}/g, logEnabled)
         .replace(/\$\{timezone\}/g, config?.log?.timezone || 8)
         .replace(/\$\{maxRequests\}/g, config?.rateLimit?.maxRequests || 100)
-        .replace(/\$\{timeWindow\}/g, timeWindow);
+        .replace(/\$\{timeWindow\}/g, timeWindow)
+        .replace(/\$\{year\}/g, new Date().getFullYear());
 
       content = Buffer.from(htmlContent, 'utf-8');
     }
