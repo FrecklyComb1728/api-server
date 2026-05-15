@@ -3,4 +3,3 @@
 logs/access.log
 server-config.json
 webhook.json
-package-lock.json
