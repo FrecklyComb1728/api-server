@@ -1,81 +1,151 @@
 const fs = require('fs');
 const path = require('path');
+
+const LEVELS = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 };
+const LEVEL_NAMES = ['ERROR', 'WARN ', 'INFO ', 'DEBUG'];
+
+let _instance = null;
+
 class Logger {
-  constructor(config) {
-    this.enableFile = config.enableFile || false;
-    this.logPath = config.logPath || 'access.log';
-    this.timezone = config.timezone || 8; // 默认 UTC+8
-    this.ipHeader = config.ipHeader === undefined ? 'X-Forwarded-For' : config.ipHeader;
+  constructor() {
+    if (_instance) return _instance;
+    this.level = 2;
+    this.file = false;
+    this.dir = 'logs';
+    this._initialized = false;
+    this._buffer = [];
+    this._flushTimer = null;
+    _instance = this;
   }
 
-  getForwardedIP(req) {
-    if (!this.ipHeader) return '';
-    const headerValue = req.get(this.ipHeader);
-    if (!headerValue) return '';
-    const first = String(headerValue)
-      .split(',')
-      .map(v => v.trim())
-      .filter(Boolean)[0];
-    return first || '';
+  static getInstance() {
+    if (!_instance) new Logger();
+    return _instance;
   }
 
-  formatTime(date) {
-    const utcTime = date.getTime();
-    const timezoneOffset = this.timezone * 60 * 60 * 1000;
-    const localTime = new Date(utcTime + timezoneOffset);
+  init(config) {
+    if (this._initialized) return;
+    config = config || {};
 
-    const year = localTime.getUTCFullYear();
-    const month = String(localTime.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(localTime.getUTCDate()).padStart(2, '0');
-    const hours = String(localTime.getUTCHours()).padStart(2, '0');
-    const minutes = String(localTime.getUTCMinutes()).padStart(2, '0');
-    const seconds = String(localTime.getUTCSeconds()).padStart(2, '0');
+    const envLevel = process.env.LOG_LEVEL?.toUpperCase();
+    const cfgLevel = String(config.level || '').toUpperCase();
+    const resolved = envLevel || cfgLevel || 'INFO';
+    this.level = LEVELS[resolved] ?? 2;
 
-    return `${year}/${month}/${day}-${hours}:${minutes}:${seconds}`;
+    this.file = config.file === true || config.file === 'true';
+    this.dir = config.dir || 'logs';
+
+    if (this.file) {
+      this._flushTimer = setInterval(() => this._flush(), 200);
+      this._flushTimer.unref();
+    }
+
+    this._initialized = true;
   }
 
-  formatLog(req, res, startTime) {
-    const forwardedIP = this.getForwardedIP(req);
-    const ip = forwardedIP || req.ip || req.connection.remoteAddress || '-';
-    const time = this.formatTime(new Date());
-    const method = req.method || '-';
-    const urlPath = req.originalUrl || req.url || '-';
-    const protocol = `HTTP/${req.httpVersion || '1.1'}`;
-    const status = res.statusCode || '-';
-    const bytes = res.get('Content-Length') || '-';
-    const referer = req.get('Referer') || '-';
-    const userAgent = req.get('User-Agent') || '-';
+  _now() {
+    const d = new Date();
+    const offset = -d.getTimezoneOffset();
+    const sign = offset >= 0 ? '+' : '-';
+    const absOffset = Math.abs(offset);
+    const tzh = String(Math.floor(absOffset / 60)).padStart(2, '0');
+    const tzm = String(absOffset % 60).padStart(2, '0');
+    const tz = `${sign}${tzh}:${tzm}`;
 
-    return `${ip} - [${time}] "${method} ${urlPath} ${protocol}" ${status} ${bytes} "${referer}" "${userAgent}" "${forwardedIP || '-'}"`;
+    const pad = (n) => String(n).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const monthStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    const timestamp = `${dateStr}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${ms}${tz}`;
+
+    return { timestamp, dateStr, monthStr };
   }
 
-  write(logEntry) {
-    console.log(logEntry);
-    if (this.enableFile) {
-      try {
-        const logDir = path.dirname(this.logPath);
-        if (logDir !== '.' && !fs.existsSync(logDir)) {
-          fs.mkdirSync(logDir, { recursive: true });
+  _buildLine(levelName, message, extra) {
+    const { timestamp } = this._now();
+    let fields = '';
+    if (extra) {
+      const parts = [];
+      for (const [k, v] of Object.entries(extra)) {
+        if (v !== undefined) {
+          const val = String(v).replace(/\n/g, '\\n');
+          parts.push(`${k}=${val}`);
         }
-
-        fs.appendFileSync(this.logPath, logEntry + '\n', 'utf-8');
-      } catch (error) {
-        console.error('无法将日志写入文件:', error.message);
       }
+      if (parts.length > 0) fields = ' ' + parts.join(' ');
+    }
+    return `${timestamp} [${levelName}]${fields} ${message}`;
+  }
+
+  _output(levelNum, message, extra) {
+    if (levelNum > this.level) return;
+
+    const cleanMsg = String(message || '').replace(/\n/g, '\\n');
+    const line = this._buildLine(LEVEL_NAMES[levelNum], cleanMsg, extra);
+    if (process.env.IS_PRIMARY_WORKER !== '0') {
+      console.log(line);
+    }
+
+    if (!this.file) return;
+
+    try {
+      const { dateStr, monthStr } = this._now();
+      this._buffer.push({ line, monthStr, dateStr });
+    } catch (e) {
+      console.error('日志缓冲失败:', e.message);
     }
   }
 
+  _flush() {
+    if (this._buffer.length === 0) return;
+    const lines = this._buffer.splice(0);
+    try {
+      for (const { line, monthStr, dateStr } of lines) {
+        const monthDir = path.join(this.dir, monthStr);
+        if (!fs.existsSync(monthDir)) {
+          fs.mkdirSync(monthDir, { recursive: true });
+        }
+        const filePath = path.join(monthDir, `${dateStr}.log`);
+        fs.appendFileSync(filePath, line + '\n', 'utf-8');
+      }
+    } catch (e) {
+      console.error('日志写入文件失败:', e.message);
+    }
+  }
+
+  error(message, extra) { this._output(0, message, extra); }
+  warn(message, extra)  { this._output(1, message, extra); }
+  info(message, extra)  { this._output(2, message, extra); }
+  debug(message, extra) { this._output(3, message, extra); }
+
+  child(req) {
+    const self = this;
+    const rid = req.rid || '-';
+    const pid = process.pid;
+    return {
+      error(m, e) { self.error(m, { rid, pid, ...(e || {}) }); },
+      warn(m, e)  { self.warn(m,  { rid, pid, ...(e || {}) }); },
+      info(m, e)  { self.info(m,  { rid, pid, ...(e || {}) }); },
+      debug(m, e) { self.debug(m, { rid, pid, ...(e || {}) }); },
+    };
+  }
+
   middleware() {
+    const self = this;
     return (req, res, next) => {
-      const startTime = Date.now();
+      const start = Date.now();
+      const method = req.method;
+      const url = req.originalUrl || req.url;
+      const rid = req.rid || '-';
+      const pid = process.pid;
+      const ip = req.ip || req.connection?.remoteAddress || '-';
 
       res.on('finish', () => {
-        try {
-          const logEntry = this.formatLog(req, res, startTime);
-          this.write(logEntry);
-        } catch (error) {
-          console.error('请求记录失败:', error.message);
-        }
+        const duration = Date.now() - start;
+        const status = res.statusCode;
+        self._output(2, `${method} ${url} ${status} ${duration}ms`, {
+          rid, pid, method, url, status, duration_ms: duration, ip
+        });
       });
 
       next();
@@ -83,4 +153,4 @@ class Logger {
   }
 }
 
-module.exports = Logger;
+module.exports = Logger.getInstance();

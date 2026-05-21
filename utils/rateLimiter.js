@@ -1,5 +1,6 @@
 const config = require('./configLoader');
 const { sendError } = require('./errorHandler');
+const logger = require('./logger');
 
 class RateLimiter {
   constructor(rateLimitConfig) {
@@ -9,6 +10,12 @@ class RateLimiter {
     this.ipHeader = rateLimitConfig.ipHeader === undefined ? 'X-Forwarded-For' : rateLimitConfig.ipHeader;
     this.ipRecords = new Map();
     this.apiPrefix = `/${config.apiDir || 'v1'}`;
+
+    if (this.enabled && this.maxRequests > 0) {
+      logger.info(`限流器已启用: ${this.maxRequests}次/${this.timeWindow}s`);
+    } else {
+      logger.info('限流器已禁用');
+    }
 
     this.cleanupInterval = setInterval(() => {
       this.cleanup();
@@ -92,6 +99,7 @@ class RateLimiter {
       const ip = this.getClientIP(req);
 
       if (this.isRateLimited(ip)) {
+        logger.warn(`限流触发`, { ip, count: `${this.maxRequests}/${this.timeWindow}s` });
         if (req.path.startsWith(this.apiPrefix)) {
           return res.status(429).json({ status: 'error', time: Date.now(), message: '请求过于频繁，请稍后重试' });
         }

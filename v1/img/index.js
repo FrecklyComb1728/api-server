@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const HttpClient = require('../../utils/httpClient');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 const config = require(path.join(__dirname, 'config.json'));
@@ -157,6 +158,8 @@ function startRefresh(orientation) {
   const o = normalizeOrientation(orientation);
   if (inflights[o]) return inflights[o];
 
+  logger.debug(`刷新图片列表: ${o}`);
+
   inflights[o] = (async () => {
     const baseUrl = normalizeBaseUrl(config?.url);
     if (!baseUrl) {
@@ -194,7 +197,10 @@ function startRefresh(orientation) {
       baseUrl
     };
     return caches[o];
-  })().finally(() => {
+  })().catch((e) => {
+    logger.warn(`刷新图片列表失败: ${o}`, { error: e.message });
+    throw e;
+  }).finally(() => {
     inflights[o] = null;
   });
 
@@ -215,9 +221,8 @@ async function getCacheNonBlocking(orientation) {
 }
 
 function warmUp() {
-  const jitter = () => Math.floor(Math.random() * 2000);
-  setTimeout(() => startRefresh('horizontal').catch(() => {}), jitter());
-  setTimeout(() => startRefresh('vertical').catch(() => {}), jitter());
+  startRefresh('horizontal').then(() => logger.info('图片预热完成: horizontal')).catch(() => {});
+  startRefresh('vertical').then(() => logger.info('图片预热完成: vertical')).catch(() => {});
 }
 
 warmUp();
@@ -293,7 +298,7 @@ async function sendRandom(req, res, mode) {
       if (r.headers && r.headers['etag']) res.set('ETag', String(r.headers['etag']));
 
       r.data.on('error', e => {
-        console.error('[图片] 流式传输错误:', e?.message || e);
+        logger.error(`流式传输错误: ${e?.message || e}`);
         if (!res.headersSent) res.status(502).end(String(e?.message || e));
         else res.end();
       });

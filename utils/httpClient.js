@@ -1,4 +1,5 @@
 const axios = require('axios');
+const logger = require('./logger');
 
 class HttpClient {
   constructor(config = {}) {
@@ -20,24 +21,30 @@ class HttpClient {
 
   handleError(error) {
     if (error.response) {
-      const err = new Error(`HTTP ${error.response.status}: ${error.response.statusText}`);
+      const msg = `HTTP ${error.response.status}: ${error.response.statusText}`;
+      logger.warn(`上游请求失败: ${msg}`, { status: error.response.status, url: error.config?.url });
+      const err = new Error(msg);
       err.statusCode = error.response.status;
       err.data = error.response.data;
       return err;
     } else if (error.code === 'ECONNABORTED') {
+      logger.warn(`上游请求超时`, { url: error.config?.url });
       const err = new Error('请求超时');
       err.code = 'TIMEOUT';
       return err;
     } else if (error.request) {
+      logger.warn(`上游请求无响应`, { url: error.config?.url });
       const err = new Error('未收到来自服务器的响应');
       err.code = 'ECONNREFUSED';
       return err;
     } else {
+      logger.warn(`上游请求异常`, { error: error.message });
       return error;
     }
   }
 
   async get(url, params = {}, config = {}) {
+    logger.debug(`GET ${url}`);
     const response = await this.axios.get(url, {
       params,
       ...config
@@ -46,6 +53,7 @@ class HttpClient {
   }
 
   async post(url, data = {}, config = {}) {
+    logger.debug(`POST ${url}`);
     const response = await this.axios.post(url, data, config);
     return response.data;
   }

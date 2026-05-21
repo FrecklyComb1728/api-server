@@ -1,5 +1,5 @@
 {
-  "projectName": "API Server",
+  "projectName": "MIFENG API Server",
   "port": 8633,
   "staticDir": "public",
   "apiDir": "v1",
@@ -13,10 +13,9 @@
     "templatePath": "template/markdown.html"
   },
   "log": {
-    "enableFile": true,
-    "logPath": "logs/access.log",
-    "timezone": 8,
-    "ipHeader": "X-Forwarded-For"
+    "level": "info",
+    "file": true,
+    "dir": "logs"
   },
   "rateLimit": {
     "enabled": true,

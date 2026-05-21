@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 const configPath = path.join(__dirname, 'config.json');
@@ -204,6 +205,7 @@ async function safeQueryIpInfo(ip, apiConfig) {
 async function queryIpInfoWithRetry(ip) {
   const cachedData = getFromCache(ip);
   if (cachedData) {
+    logger.debug(`IP缓存命中`, { ip });
     return cachedData;
   }
   let availableApis = getAvailableApis();
@@ -237,9 +239,11 @@ async function queryIpInfoWithRetry(ip) {
     }
     try {
       result = await safeQueryIpInfo(ip, selectedApi);
+      logger.debug(`IP查询成功`, { source: result.source, ip });
       saveToCache(ip, result);
       return result;
     } catch (error) {
+      logger.warn(`IP查询上游失败`, { source: selectedApi.name, error: error.message, attempt: retryRound + 1 });
       lastError = error;
       triedApis.add(selectedApi.name);
     }

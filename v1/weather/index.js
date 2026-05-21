@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const HttpClient = require('../../utils/httpClient');
 const { queryIpInfoWithRetry, getClientIp } = require('../ipinfo');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 
@@ -20,6 +21,9 @@ function getRealtimeUpstreamState(name) {
 
 function markRealtimeUpstreamSuccess(name) {
   const st = getRealtimeUpstreamState(name);
+  if (st.failures > 0) {
+    logger.info(`上游恢复: ${name}`);
+  }
   st.failures = 0;
   st.unavailableUntil = 0;
 }
@@ -31,6 +35,7 @@ function markRealtimeUpstreamFailure(name) {
   const max = Number(config?.realtime_failover_cooldown_max_ms) || 300000;
   const cooldown = Math.min(max, base * Math.pow(2, Math.max(0, st.failures - 1)));
   st.unavailableUntil = Date.now() + cooldown;
+  logger.warn(`上游故障: ${name}`, { failures: st.failures, cooldown_ms: cooldown });
 }
 
 function isRealtimeUpstreamAvailable(name) {
@@ -354,6 +359,8 @@ async function queryRealtimeWithRetry(http, cityQuery) {
     const selected = selectNextRealtimeUpstream(available);
     if (!selected) break;
 
+    logger.debug(`实时天气上游: ${selected.name}`, { attempt: attempt + 1, available: available.map(u => u.name).join(',') });
+
     try {
       const data = await selected.fn();
       if (data) {
@@ -383,7 +390,7 @@ async function buildRealtime(req, cityQuery) {
   try {
     result = await queryRealtimeWithRetry(http, cityQuery);
   } catch (e) {
-    console.error('[天气] 实时天气查询失败:', e?.message || e);
+    logger.error(`实时天气查询失败: ${e?.message || e}`);
     result = null;
   }
 
@@ -476,6 +483,8 @@ async function buildWeek(cityQuery) {
 
   const stationId = findIdByTailMatch(cityQuery, cmoIdMap) || findIdByTailMatch(city, cmoIdMap);
   const sojsonCityId = findIdByTailMatch(cityQuery, cityIdMap) || findIdByTailMatch(city, cityIdMap);
+
+  logger.debug(`城市ID匹配: ${cityQuery}`, { stationId, sojsonCityId });
 
   const providers = [];
   if (stationId) providers.push(() => fetchCmaWeek(http, stationId));

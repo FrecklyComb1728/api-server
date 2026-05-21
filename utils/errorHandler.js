@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./configLoader');
+const logger = require('./logger');
 
 const errorMessages = {
   400: {
@@ -72,10 +73,7 @@ function errorHandlerMiddleware(err, req, res, next) {
     return next(err);
   }
   const statusCode = err.statusCode || err.status || 500;
-  console.error(`[错误] ${statusCode} - ${err.message}`);
-  if (statusCode === 500) {
-    console.error(err.stack);
-  }
+  logger.error(`${statusCode} ${err.message}`, { rid: req.rid, method: req.method, url: req.url, stack: err.stack });
   sendError(res, statusCode);
 }
 

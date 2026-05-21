@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const cluster = require('cluster');
 const { sendError } = require('../utils/errorHandler');
+const logger = require('../utils/logger');
 
 function loadApis(app, config) {
   const apiRoot = path.join(process.cwd(), config.apiDir || 'v1');
@@ -10,6 +11,8 @@ function loadApis(app, config) {
   }
 
   const modulesMeta = [];
+
+  logger.debug(`扫描 API 目录: ${apiRoot}`);
 
   const modules = fs.readdirSync(apiRoot).filter((name) => {
     const full = path.join(apiRoot, name);
@@ -30,10 +33,10 @@ function loadApis(app, config) {
         modulesMeta.push({ id: name, ...router.meta });
       }
       if (cluster.isPrimary || process.env.IS_PRIMARY_WORKER === '1') {
-        console.log(`加载模块成功: ${name}`);
+        logger.info(`加载模块成功: ${name}`);
       }
     } catch (e) {
-      console.error(`加载模块失败: ${name}`, e.message);
+      logger.error(`加载模块失败: ${name}`, { error: e.message });
     }
   });
 

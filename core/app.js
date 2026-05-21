@@ -1,9 +1,10 @@
+const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const config = require('../utils/configLoader');
+const logger = require('../utils/logger');
 const corsMiddleware = require('../utils/corsHandler');
 const urlDecoderMiddleware = require('../utils/urlDecoder');
-const Logger = require('../utils/logger');
 const RateLimiter = require('../utils/rateLimiter');
 const loadApis = require('./apiLoader');
 const { errorHandlerMiddleware } = require('../utils/errorHandler');
@@ -18,7 +19,15 @@ function createApp() {
   app.use(corsMiddleware);
   app.use(express.json());
 
-  const logger = new Logger(config.log || {});
+  app.use((req, res, next) => {
+    req.rid = crypto.randomUUID().slice(0, 12);
+    res.setHeader('X-Request-Id', req.rid);
+    next();
+  });
+
+  logger.init(config.log || {});
+  app.set('logger', logger);
+
   app.use(logger.middleware());
 
   const limiter = new RateLimiter(config.rateLimit || {});
