@@ -34,6 +34,14 @@
   "cluster": {
     "enabled": true,
     "workers": 0
+  },
+  "redis": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "keyPrefix": "api-server:"
   }
 }
 ```
@@ -83,6 +91,34 @@
 | `cluster.workers` | `0` = CPU 核心数，`>0` = 指定数量 |
 
 **PM2 共存**：当进程由 PM2 管理时（检测到 `pm_id` 环境变量），内置 cluster 自动关闭，由 PM2 负责多进程管理和零停机 reload。直接 `node server.js` 启动时则使用内置 cluster。
+
+### Redis（集群缓存与限流共享）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `redis.enabled` | boolean | 是否启用 Redis；`false` 时回退内存模式（cluster 下限流不共享） |
+| `redis.host` | string | Redis 主机地址 |
+| `redis.port` | number | Redis 端口，默认 `6379` |
+| `redis.password` | string | Redis 密码（可选，优先使用 `REDIS_PASSWORD` 环境变量） |
+| `redis.db` | number | Redis 数据库编号，默认 `0` |
+| `redis.keyPrefix` | string | 键前缀，默认 `""`，推荐 `"api-server:"` |
+
+示例：
+
+```json
+"redis": {
+  "enabled": true,
+  "host": "127.0.0.1",
+  "port": 6379,
+  "password": "",
+  "db": 0,
+  "keyPrefix": "api-server:"
+}
+```
+
+**密码优先级**：环境变量 `REDIS_PASSWORD` > 配置文件 `redis.password`。PM2 部署时通过 `ecosystem.config.js` 的 `env` 字段注入更安全。
+
+**启动行为**：Redis 启用时，若连接失败则服务直接拒绝启动（`process.exit(1)`）；禁用时使用进程内存模式。
 
 ## HTML 模板变量
 

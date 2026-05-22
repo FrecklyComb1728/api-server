@@ -9,8 +9,6 @@ const clusterConfig = config && typeof config === 'object' ? config.cluster : nu
 const clusterEnabled = Boolean(clusterConfig && clusterConfig.enabled);
 const managedByPM2 = 'pm_id' in process.env;
 
-// PM2 管理时以单进程运行，PM2 自己负责 cluster 和 reload
-// 直接 node server.js 时使用内置 cluster
 if (!managedByPM2 && clusterEnabled && cluster.isPrimary) {
   cluster.schedulingPolicy = cluster.SCHED_NONE;
 
@@ -30,22 +28,25 @@ if (!managedByPM2 && clusterEnabled && cluster.isPrimary) {
     cluster.fork({ IS_PRIMARY_WORKER: '0' });
   });
 } else {
-  const { app, limiter } = createApp();
-  const server = app.listen(port, () => {
-    if (process.send) process.send('ready');
-    if (managedByPM2 || !clusterEnabled || process.env.IS_PRIMARY_WORKER === '1') {
-      logger.info(`服务已启动: http://localhost:${port}`, { pid: process.pid });
-    }
-  });
-
-  const shutdown = () => {
-    logger.info('收到关闭信号，等待请求完成');
-    server.close(() => {
-      limiter.destroy();
-      process.exit(0);
+  (async () => {
+    const { app, limiter, destroy } = await createApp();
+    const server = app.listen(port, () => {
+      if (process.send) process.send('ready');
+      if (managedByPM2 || !clusterEnabled || process.env.IS_PRIMARY_WORKER === '1') {
+        logger.info(`服务已启动: http://localhost:${port}`, { pid: process.pid });
+      }
     });
-    setTimeout(() => process.exit(1), 5000);
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+
+    const shutdown = () => {
+      logger.info('收到关闭信号，等待请求完成');
+      server.close(() => {
+        destroy();
+        limiter.destroy();
+        process.exit(0);
+      });
+      setTimeout(() => process.exit(1), 5000);
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+  })();
 }

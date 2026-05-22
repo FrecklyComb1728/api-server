@@ -3,12 +3,14 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
+const { getStore } = require('../../libs/cacheStore');
 
 const router = express.Router();
 const configPath = path.join(__dirname, 'config.json');
 const config = require(configPath);
 
-const ipCache = new Map();
+const cache = getStore();
+const CACHE_PREFIX = 'ipinfo:';
 let lastUsedApiIndex = -1;
 const apiRequestCounters = {};
 config.upstream_apis.forEach(api => {
@@ -134,7 +136,7 @@ function mapResponseToStandardFormat(data, fieldMapping, variables) {
   }
   return result;
 }
-// 缓存一整个D段
+
 function getCacheKey(ip) {
   const ipStr = String(ip || '').trim();
   const match = ipStr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -144,17 +146,10 @@ function getCacheKey(ip) {
   return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
 }
 
-function getFromCache(ip) {
-  const key = getCacheKey(ip);
-  if (!ipCache.has(key)) return null;
-  const cacheItem = ipCache.get(key);
-  const now = Date.now();
-  if (now - cacheItem.timestamp > config.cache_ttl * 1000) {
-    ipCache.delete(key);
-    return null;
-  }
-  if (!cacheItem.data) return null;
-  const cached = cacheItem.data;
+async function getFromCache(ip) {
+  const key = CACHE_PREFIX + getCacheKey(ip);
+  const cached = await cache.get(key);
+  if (!cached) return null;
   if (cached && cached.data) {
     return {
       ...cached,
@@ -167,12 +162,10 @@ function getFromCache(ip) {
   return cached;
 }
 
-function saveToCache(ip, data) {
-  const key = getCacheKey(ip);
-  ipCache.set(key, {
-    data,
-    timestamp: Date.now()
-  });
+async function saveToCache(ip, data) {
+  const key = CACHE_PREFIX + getCacheKey(ip);
+  const ttl = Number(config.cache_ttl);
+  await cache.set(key, data, ttl > 0 ? ttl : 0);
 }
 
 async function safeQueryIpInfo(ip, apiConfig) {
@@ -203,7 +196,7 @@ async function safeQueryIpInfo(ip, apiConfig) {
 }
 
 async function queryIpInfoWithRetry(ip) {
-  const cachedData = getFromCache(ip);
+  const cachedData = await getFromCache(ip);
   if (cachedData) {
     logger.debug(`IP缓存命中`, { ip });
     return cachedData;
@@ -240,7 +233,7 @@ async function queryIpInfoWithRetry(ip) {
     try {
       result = await safeQueryIpInfo(ip, selectedApi);
       logger.debug(`IP查询成功`, { source: result.source, ip });
-      saveToCache(ip, result);
+      await saveToCache(ip, result);
       return result;
     } catch (error) {
       logger.warn(`IP查询上游失败`, { source: selectedApi.name, error: error.message, attempt: retryRound + 1 });

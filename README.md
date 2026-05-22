@@ -24,36 +24,41 @@ pnpm dev
 ## 项目结构
 
 ```
-server.js            # 入口（内置 cluster / PM2 自适应）
+server.js              # 入口（内置 cluster / PM2 自适应）
 core/
-  app.js             # Express 应用创建
-  apiLoader.js       # 自动加载 v1/ 模块 + /v1/meta 接口
+  app.js               # Express 应用创建 + Redis/Store 初始化
+  apiLoader.js         # 自动加载 v1/ 模块 + /v1/meta 接口
+libs/
+  redisClient.js       # Redis 连接管理（重连、错误捕获、优雅关闭）
+  cacheStore.js        # 缓存抽象层（Memory / Redis 双后端）
+  rateLimitStore.js    # 限流抽象层（滑动窗口 + Lua 原子脚本）
 utils/
-  configLoader.js    # 统一配置加载
-  staticServer.js    # 静态资源 / Markdown 路由
+  configLoader.js      # 统一配置加载
+  staticServer.js      # 静态资源 / Markdown 路由
   markdownRenderer.js  # Markdown → HTML
-  errorHandler.js    # 错误页面渲染
-  rateLimiter.js     # IP 滑动窗口限流
-  logger.js          # 访问日志
-  httpClient.js      # axios 封装
-  corsHandler.js     # CORS
-  urlDecoder.js      # URL 解码
-  mimeTypes.js       # MIME 映射
+  errorHandler.js      # 错误页面渲染
+  rateLimiter.js       # IP 滑动窗口限流（支持集群共享）
+  logger.js            # 访问日志
+  httpClient.js        # axios 封装
+  corsHandler.js       # CORS
+  urlDecoder.js        # URL 解码
+  mimeTypes.js         # MIME 映射
 v1/
-  img/               # 随机图片模块
-  ipinfo/            # IP 信息模块
-  weather/           # 天气模块
+  img/                 # 随机图片模块
+  ipinfo/              # IP 信息模块
+  weather/             # 天气模块
 template/
-  index.html         # 首页（动态加载 API 端点）
-  error.html         # 错误页
-  markdown.html      # Markdown 文档渲染模板
-ecosystem.config.js  # PM2 零停机部署配置
-deploy.sh            # Webhook 部署脚本
+  index.html           # 首页（动态加载 API 端点）
+  error.html           # 错误页
+  markdown.html        # Markdown 文档渲染模板
+ecosystem.config.js    # PM2 零停机部署配置
+deploy.sh              # Webhook 部署脚本
 ```
 
 ## 技术栈
 
-- Express 4 + axios + marked
+- Express 4 + axios + marked + ioredis
+- Redis 集中式缓存与限流（PM2 cluster 多 worker 共享状态）
 - 内置 Node.js cluster 多进程（PM2 环境下自动适配）
 - 模板变量替换（`${projectName}` 等，见 [配置文档](docs/config.md)）
 

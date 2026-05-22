@@ -1,5 +1,5 @@
 {
-  "projectName": "MIFENG API Server",
+  "projectName": "API Server",
   "port": 8633,
   "staticDir": "public",
   "apiDir": "v1",
@@ -13,7 +13,7 @@
     "templatePath": "template/markdown.html"
   },
   "log": {
-    "level": "info",
+    "level": "debug",
     "file": true,
     "dir": "logs"
   },
@@ -26,5 +26,14 @@
   "cluster": {
     "enabled": true,
     "workers": 0
+  },
+  "redis": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "keyPrefix": "api-server:"
   }
+}
 }

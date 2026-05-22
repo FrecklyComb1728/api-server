@@ -10,8 +10,31 @@ const loadApis = require('./apiLoader');
 const { errorHandlerMiddleware } = require('../utils/errorHandler');
 const { setupStaticRoutes } = require('../utils/staticServer');
 const { MarkdownRenderer } = require('../utils/markdownRenderer');
+const redisClient = require('../libs/redisClient');
+const cacheStore = require('../libs/cacheStore');
+const rateLimitStore = require('../libs/rateLimitStore');
 
-function createApp() {
+async function createApp() {
+  const redisCfg = config.redis;
+  const redisEnabled = !!(redisCfg && redisCfg.enabled);
+
+  if (redisEnabled) {
+    try {
+      redisClient.init(redisCfg);
+      await redisClient.connect();
+      logger.info('Redis 连接成功', { host: redisCfg.host, port: redisCfg.port });
+    } catch (err) {
+      logger.error('Redis 连接失败，拒绝启动', { error: err.message });
+      process.exit(1);
+    }
+  }
+
+  const mode = redisEnabled ? 'redis' : 'memory';
+  const redis = redisEnabled ? redisClient.getClient() : null;
+  const prefix = redisEnabled ? (redisCfg.keyPrefix || '') : '';
+
+  cacheStore.init(mode, redis, prefix);
+  rateLimitStore.init(mode, redis, prefix);
 
   const app = express();
 
@@ -41,7 +64,15 @@ function createApp() {
 
   app.use(errorHandlerMiddleware);
 
-  return { app, limiter };
+  return {
+    app,
+    limiter,
+    destroy: () => {
+      if (redisEnabled) {
+        redisClient.destroy();
+      }
+    }
+  };
 }
 
 module.exports = createApp;

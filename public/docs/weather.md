@@ -1,63 +1,111 @@
-# 天气信息接口
+# 天气接口（/v1/weather）
 
-提供实时天气和 7 天天气预报查询服务，聚合多个主流天气服务商数据。
+实时天气 + 7 天预报，IP 自动定位城市，多源聚合备份。
 
-## 接口列表
+## 端点
 
-### 1. 综合天气查询
-- **路径**: `GET /v1/weather`
-- **说明**: 同时返回实时天气 (`realtime`) 和 7 天预报 (`week`)。
-- **参数**:
-    - `city` (Query, 可选): 城市名称（如：北京）。
-    - `ip` (Query, 可选): 根据 IP 自动推断城市。
-- **示例**: `GET /v1/weather?city=北京`
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/v1/weather` | 综合查询（实时 + 7 天预报） |
+| `GET` | `/v1/weather/realtime` | 仅实时天气 |
+| `GET` | `/v1/weather/week` | 仅 7 天预报 |
 
-### 2. 实时天气
-- **路径**: `GET /v1/weather/realtime`
-- **说明**: 仅返回实时天气数据。
-- **示例**: `GET /v1/weather/realtime?city=北京`
+## 通用参数
 
-### 3. 7天预报
-- **路径**: `GET /v1/weather/week`
-- **说明**: 仅返回 7 天天气预报。
-- **示例**: `GET /v1/weather/week?city=北京`
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `city` | string | 城市名称，如 `北京`、`上海` |
+| `ip` | string | 根据 IP 自动定位城市 |
 
-## 响应结构
+> `city` 和 `ip` 都不传时，使用请求来源 IP 定位。
 
-### 实时天气 (realtime)
+## 调用示例
+
+```bash
+# 综合查询
+curl 'http://api.mfawa.top/v1/weather?city=北京'
+
+# 仅实时天气
+curl 'http://api.mfawa.top/v1/weather/realtime?city=上海'
+
+# 自动定位
+curl http://api.mfawa.top/v1/weather
+```
+
+## 响应
+
+### 综合查询（`/v1/weather`）
+
 ```json
 {
   "ip": "1.2.3.4",
   "city": "北京",
-  "high": "3",
-  "low": "3",
-  "temperature": "3",
-  "weather": "阴",
-  "wind": "西北风",
-  "windSpeed": "3级",
-  "visibility": "30km",
-  "humidity": "44%",
-  "time": "04:13:49",
-  "date": "2025/12/20"
+  "realtime": {
+    "city": "北京",
+    "high": "3",
+    "low": "3",
+    "temperature": "3",
+    "weather": "阴",
+    "wind": "西北风",
+    "windSpeed": "3级",
+    "visibility": "30km",
+    "humidity": "44%",
+    "time": "04:13:49",
+    "date": "2025/12/20"
+  },
+  "week": [
+    {
+      "date": "2025/12/20",
+      "wind": "北风",
+      "windSpeed": "微风",
+      "weather": "中雨转小雨",
+      "temperature": "9℃",
+      "week": "星期六"
+    }
+  ]
 }
 ```
 
-### 7天预报 (week)
-```json
-[
-  {
-    "date": "2025/12/20",
-    "wind": "北风",
-    "windSpeed": "微风",
-    "weather": "中雨转小雨",
-    "temperature": "9℃",
-    "week": "星期六"
-  },
-  ...
-]
-```
+### 实时天气字段
+
+| 字段 | 说明 |
+|------|------|
+| `high` | 最高温度 |
+| `low` | 最低温度 |
+| `temperature` | 当前温度 |
+| `weather` | 天气状况 |
+| `wind` | 风向 |
+| `windSpeed` | 风力 |
+| `visibility` | 能见度 |
+| `humidity` | 湿度 |
+| `time` | 更新时间 |
+| `date` | 日期 |
+
+### 7 天预报字段
+
+| 字段 | 说明 |
+|------|------|
+| `date` | 日期 |
+| `week` | 星期 |
+| `weather` | 天气 |
+| `temperature` | 温度范围 |
+| `wind` | 风向 |
+| `windSpeed` | 风力 |
 
 ## 功能特性
-- **城市自动识别**: 支持通过 `city` 参数直接查询，或通过 `ip` 自动识别城市。
-- **多源备份**: 实时天气支持 MSN、高德、52vmy、苏晏等，预报支持 CMA、Sojson。
-- **智能匹配**: 支持城市名后缀（省/市/区）的自动补全与模糊匹配。
+
+- **城市自动识别**：`city` 参数直接查询，`ip` 参数 / 来源 IP 自动定位。
+- **多源备份**：实时天气支持 MSN、高德、52vmy 等；预报支持 CMA、Sojson。
+- **故障转移**：上游不可用时自动切换备用源。
+
+## 错误响应
+
+| 状态码 | 场景 |
+|--------|------|
+| `400` | 未找到匹配城市 |
+| `500` | 所有上游均不可用 |
+| `429` | 触发限流 |
+
+```json
+{ "error": "无法将城市名匹配到 cityid" }
+```

@@ -1,6 +1,7 @@
 const config = require('./configLoader');
 const { sendError } = require('./errorHandler');
 const logger = require('./logger');
+const { getStore } = require('../libs/rateLimitStore');
 
 class RateLimiter {
   constructor(rateLimitConfig) {
@@ -8,7 +9,7 @@ class RateLimiter {
     this.timeWindow = rateLimitConfig.timeWindow || 60;
     this.maxRequests = rateLimitConfig.maxRequests || 100;
     this.ipHeader = rateLimitConfig.ipHeader === undefined ? 'X-Forwarded-For' : rateLimitConfig.ipHeader;
-    this.ipRecords = new Map();
+    this.store = getStore();
     this.apiPrefix = `/${config.apiDir || 'v1'}`;
 
     if (this.enabled && this.maxRequests > 0) {
@@ -16,10 +17,6 @@ class RateLimiter {
     } else {
       logger.info('限流器已禁用');
     }
-
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup();
-    }, 60000);
   }
 
   getClientIP(req) {
@@ -36,57 +33,16 @@ class RateLimiter {
     return req.ip || req.connection.remoteAddress || '0.0.0.0';
   }
 
-  isRateLimited(ip) {
-    const now = Date.now();
-    const records = this.ipRecords.get(ip);
-    
-    if (!records || records.length === 0) {
-      return false;
+  async check(ip) {
+    if (!this.enabled || this.maxRequests <= 0) {
+      return { allowed: true };
     }
-
-    const windowStart = now - this.timeWindow * 1000;
-    const recentRequests = records.filter(timestamp => timestamp > windowStart);
-
-    if (recentRequests.length !== records.length) {
-      this.ipRecords.set(ip, recentRequests);
-    }
-
-    return recentRequests.length >= this.maxRequests;
-  }
-
-  recordRequest(ip) {
-    const now = Date.now();
-    
-    if (!this.ipRecords.has(ip)) {
-      this.ipRecords.set(ip, []);
-    }
-    
-    const records = this.ipRecords.get(ip);
-    records.push(now);
-
-    const windowStart = now - this.timeWindow * 1000;
-    const recentRequests = records.filter(timestamp => timestamp > windowStart);
-    this.ipRecords.set(ip, recentRequests);
-  }
-
-  cleanup() {
-    const now = Date.now();
-    const windowStart = now - this.timeWindow * 1000;
-    
-    for (const [ip, records] of this.ipRecords.entries()) {
-      const recentRequests = records.filter(timestamp => timestamp > windowStart);
-      
-      if (recentRequests.length === 0) {
-        this.ipRecords.delete(ip);
-      } else {
-        this.ipRecords.set(ip, recentRequests);
-      }
-    }
+    return this.store.check(`ratelimit:${ip}`, this.timeWindow, this.maxRequests);
   }
 
   destroy() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
+    if (this.store && typeof this.store.destroy === 'function') {
+      this.store.destroy();
     }
   }
 
@@ -95,20 +51,21 @@ class RateLimiter {
       if (!this.enabled || this.maxRequests === 0) {
         return next();
       }
-      
+
       const ip = this.getClientIP(req);
-
-      if (this.isRateLimited(ip)) {
-        logger.warn(`限流触发`, { ip, count: `${this.maxRequests}/${this.timeWindow}s` });
-        if (req.path.startsWith(this.apiPrefix)) {
-          return res.status(429).json({ status: 'error', time: Date.now(), message: '请求过于频繁，请稍后重试' });
+      this.check(ip).then(result => {
+        if (!result.allowed) {
+          logger.warn(`限流触发`, { ip, count: `${this.maxRequests}/${this.timeWindow}s` });
+          if (req.path.startsWith(this.apiPrefix)) {
+            return res.status(429).json({ status: 'error', time: Date.now(), message: '请求过于频繁，请稍后重试' });
+          }
+          return sendError(res, 429);
         }
-        return sendError(res, 429);
-      }
-
-      this.recordRequest(ip);
-      
-      next();
+        next();
+      }).catch(err => {
+        logger.warn(`限流器检查异常，放行请求`, { ip, error: err.message });
+        next();
+      });
     };
   }
 }

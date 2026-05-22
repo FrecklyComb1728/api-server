@@ -17,7 +17,11 @@ pnpm dev
 api-server/
   core/
     apiLoader.js       # 自动加载 v1/ 下的模块，提供 /v1/meta 接口
-    app.js             # Express 应用创建（中间件、路由、静态文件）
+    app.js             # Express 应用创建（中间件、路由、静态文件、Redis/Store 初始化）
+  libs/
+    redisClient.js     # Redis 连接管理（重连、错误捕获、优雅关闭）
+    cacheStore.js      # 缓存抽象层（Memory / Redis 双后端，支持分布式锁）
+    rateLimitStore.js  # 限流抽象层（滑动窗口 + Lua 原子脚本）
   utils/
     configLoader.js    # 统一配置加载（server-config.json）
     corsHandler.js     # CORS 跨域中间件
@@ -26,7 +30,7 @@ api-server/
     logger.js          # 访问日志（文件写入 + 时区偏移）
     markdownRenderer.js  # markdown → HTML 渲染（marked）
     mimeTypes.js       # 静态文件 MIME 类型映射
-    rateLimiter.js     # 基于 IP 的滑动窗口限流
+    rateLimiter.js     # 基于 IP 的滑动窗口限流（支持 Redis 集群共享）
     staticServer.js    # 静态资源 / Markdown 文档路由
     urlDecoder.js      # URL 解码中间件
   v1/
@@ -39,6 +43,7 @@ api-server/
     markdown.html      # Markdown 文档渲染模板
   docs/                # 项目文档（可访问 /docs/*.md）
   public/              # 静态资源（favicon、图片、CSS 等）
+  tests/               # 单元测试（node:test）
   server.js            # 入口（内置 cluster / PM2 自适应）
   server-config.json   # 服务配置
   ecosystem.config.js  # PM2 生产部署配置
@@ -64,7 +69,7 @@ api-server/
 2. CORS（`GET, POST, OPTIONS`）
 3. JSON 请求体解析
 4. 访问日志
-5. 限流（每 IP 100 次 / 60 秒）
+5. 限流（每 IP 100 次 / 60 秒，支持 Redis 集群共享计数器）
 
 ## 技术栈
 
@@ -72,6 +77,7 @@ api-server/
 - **Express 4** — Web 框架
 - **axios** — HTTP 客户端
 - **marked** — Markdown 渲染
+- **ioredis** — Redis 客户端（集群缓存与限流共享）
 
 ## 文档
 

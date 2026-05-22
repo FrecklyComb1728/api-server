@@ -107,9 +107,23 @@ router.get('/', (req, res) => {
 - URL 解码
 - CORS
 - 访问日志
-- 限流
+- 限流（Redis 集群共享，异常时 fail-open）
 
 无需在插件中重复配置。
+
+## 使用公共库
+
+插件可直接引用项目提供的库：
+
+```js
+const { getStore } = require('../../libs/cacheStore');
+const { getStore: getRateLimitStore } = require('../../libs/rateLimitStore');
+
+const cache = getStore();
+const rateLimiter = getRateLimitStore();
+```
+
+`libs/cacheStore` 提供 `get(key)` / `set(key, value, ttlSeconds)` / `setNX(key, value, ttlSeconds)` 等接口，底层根据配置自动选择 Memory 或 Redis 后端。
 
 ## 注意事项
 

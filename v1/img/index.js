@@ -2,33 +2,19 @@ const express = require('express');
 const path = require('path');
 const HttpClient = require('../../utils/httpClient');
 const logger = require('../../utils/logger');
+const { getStore } = require('../../libs/cacheStore');
 
 const router = express.Router();
 const config = require(path.join(__dirname, 'config.json'));
 
 const http = new HttpClient({ timeout: Number(config?.timeout_ms) || 10000 });
 
-const caches = {
-  horizontal: { items: [], urls: [], fetchedAt: 0, baseUrl: '' },
-  vertical: { items: [], urls: [], fetchedAt: 0, baseUrl: '' }
-};
+const cache = getStore();
+const CACHE_PREFIX = 'img:';
+const LOCK_PREFIX = 'img:lock:';
+const LOCK_TTL = 30;
+
 const inflights = { horizontal: null, vertical: null };
-
-const cleanupInterval = setInterval(() => {
-  const now = Date.now();
-  const ttl = ttlMs();
-  if (ttl <= 0) return;
-  for (const key of Object.keys(caches)) {
-    const c = caches[key];
-    if (c && c.items && c.items.length > 0 && now - (c.fetchedAt || 0) >= ttl) {
-      caches[key] = { items: [], urls: [], fetchedAt: 0, baseUrl: '' };
-    }
-  }
-}, 60000);
-
-function destroyCacheCleanup() {
-  if (cleanupInterval) clearInterval(cleanupInterval);
-}
 
 router.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate');
@@ -62,6 +48,14 @@ function isVerticalByUserAgent(ua) {
 function pickOrientationByReq(req) {
   const ua = req?.headers?.['user-agent'];
   return isVerticalByUserAgent(ua) ? 'vertical' : 'horizontal';
+}
+
+function cacheKey(orientation) {
+  return CACHE_PREFIX + normalizeOrientation(orientation);
+}
+
+function lockKey(orientation) {
+  return LOCK_PREFIX + normalizeOrientation(orientation);
 }
 
 function extractList(data) {
@@ -111,12 +105,16 @@ function ttlMs() {
   return v * 1000;
 }
 
-function isCacheFresh(orientation, now) {
-  const ttl = ttlMs();
+function ttlSec() {
+  const v = Number(config?.cache_ttl);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return v;
+}
+
+function isCacheFresh(data, now, ttl) {
   if (ttl <= 0) return false;
-  const c = caches[normalizeOrientation(orientation)];
-  if (!c || !c.items || c.items.length === 0) return false;
-  return now - (c.fetchedAt || 0) < ttl;
+  if (!data || !data.items || data.items.length === 0) return false;
+  return now - (data.fetchedAt || 0) < ttl;
 }
 
 function getLegacyUpstreamUrl(pathValue) {
@@ -154,67 +152,95 @@ function getUpstreamHeaders(orientation) {
   return { ...(base || {}), ...(h || {}) };
 }
 
-function startRefresh(orientation) {
+async function startRefresh(orientation) {
   const o = normalizeOrientation(orientation);
+
   if (inflights[o]) return inflights[o];
 
-  logger.debug(`刷新图片列表: ${o}`);
+  const key = cacheKey(o);
+  const lok = lockKey(o);
+  const ttl = ttlSec();
 
   inflights[o] = (async () => {
-    const baseUrl = normalizeBaseUrl(config?.url);
-    if (!baseUrl) {
-      const err = new Error('配置缺少url');
-      err.statusCode = 500;
-      throw err;
+    const locked = await cache.setNX(lok, '1', LOCK_TTL);
+
+    if (!locked) {
+      const deadline = Date.now() + LOCK_TTL * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200));
+        const data = await cache.get(key);
+        if (data) return data;
+      }
     }
 
-    const upstreamUrl = getUpstreamUrl(o);
-    if (!upstreamUrl) {
-      const err = new Error('配置缺少upstream');
-      err.statusCode = 500;
-      throw err;
+    try {
+      logger.debug(`刷新图片列表: ${o}`);
+
+      const baseUrl = normalizeBaseUrl(config?.url);
+      if (!baseUrl) {
+        const err = new Error('配置缺少url');
+        err.statusCode = 500;
+        throw err;
+      }
+
+      const upstreamUrl = getUpstreamUrl(o);
+      if (!upstreamUrl) {
+        const err = new Error('配置缺少upstream');
+        err.statusCode = 500;
+        throw err;
+      }
+
+      const headers = getUpstreamHeaders(o);
+      const raw = await http.get(upstreamUrl, {}, { headers });
+      const list = extractList(raw);
+
+      const items = [];
+      const urls = [];
+      for (const it of list) {
+        if (!it || typeof it !== 'object') continue;
+        const p = normalizePath(it.path);
+        if (!p) continue;
+        const name = String(it.name ?? '').trim();
+        items.push({ name, path: p });
+        urls.push(`${baseUrl}${p}`);
+      }
+
+      const data = {
+        items,
+        urls,
+        fetchedAt: Date.now(),
+        baseUrl
+      };
+
+      const storeTTL = ttl > 0 ? ttl * 2 : 0;
+      await cache.set(key, data, storeTTL);
+      return data;
+    } catch (e) {
+      logger.warn(`刷新图片列表失败: ${o}`, { error: e.message });
+      throw e;
+    } finally {
+      if (locked) {
+        await cache.del(lok);
+      }
+      inflights[o] = null;
     }
-
-    const headers = getUpstreamHeaders(o);
-    const raw = await http.get(upstreamUrl, {}, { headers });
-    const list = extractList(raw);
-
-    const items = [];
-    const urls = [];
-    for (const it of list) {
-      if (!it || typeof it !== 'object') continue;
-      const p = normalizePath(it.path);
-      if (!p) continue;
-      const name = String(it.name ?? '').trim();
-      items.push({ name, path: p });
-      urls.push(`${baseUrl}${p}`);
-    }
-
-    caches[o] = {
-      items,
-      urls,
-      fetchedAt: Date.now(),
-      baseUrl
-    };
-    return caches[o];
-  })().catch((e) => {
-    logger.warn(`刷新图片列表失败: ${o}`, { error: e.message });
-    throw e;
-  }).finally(() => {
-    inflights[o] = null;
-  });
+  })();
 
   return inflights[o];
 }
 
 async function getCacheNonBlocking(orientation) {
   const o = normalizeOrientation(orientation);
+  const key = cacheKey(o);
   const now = Date.now();
-  if (isCacheFresh(o, now)) return caches[o];
+  const ttl = ttlMs();
 
-  if (caches[o] && caches[o].items && caches[o].items.length > 0) {
+  const data = await cache.get(key);
+  if (data && isCacheFresh(data, now, ttl)) return data;
+
+  if (data && data.items && data.items.length > 0) {
     startRefresh(o).catch(() => {});
-    return caches[o];
+    return data;
   }
 
   return startRefresh(o);
@@ -249,7 +275,9 @@ async function sendRandom(req, res, mode) {
   try {
     c = await getCacheNonBlocking(orientation);
   } catch (e) {
-    if (caches[orientation] && caches[orientation].items && caches[orientation].items.length > 0) c = caches[orientation];
+    const key = cacheKey(normalizeOrientation(orientation));
+    const stale = await cache.get(key);
+    if (stale && stale.items && stale.items.length > 0) c = stale;
     else {
       const code = Number(e?.statusCode) || 502;
       return res.status(code).json({ status: 'error', time: Date.now(), message: String(e?.message || e) });
@@ -328,7 +356,9 @@ async function sendList(req, res, mode) {
   try {
     c = await getCacheNonBlocking(orientation);
   } catch (e) {
-    if (caches[orientation] && caches[orientation].items && caches[orientation].items.length > 0) c = caches[orientation];
+    const key = cacheKey(normalizeOrientation(orientation));
+    const stale = await cache.get(key);
+    if (stale && stale.items && stale.items.length > 0) c = stale;
     else {
       const code = Number(e?.statusCode) || 502;
       return res.status(code).json({ status: 'error', time: Date.now(), message: String(e?.message || e) });
@@ -361,7 +391,6 @@ router.get('/list/h', (req, res) => sendList(req, res, 'horizontal'));
 router.get('/list/v', (req, res) => sendList(req, res, 'vertical'));
 
 module.exports = router;
-module.exports.destroyCacheCleanup = destroyCacheCleanup;
 module.exports.meta = {
   name: '随机图片',
   description: '上游聚合，UA 自适应',
