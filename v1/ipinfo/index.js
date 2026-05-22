@@ -121,8 +121,12 @@ function resolveFieldValue(data, apiField, variables) {
       return variables[key];
     });
     if (!parts.some(p => p === undefined)) {
-      const v = getNestedValue(data, parts.join('.'));
-      if (v !== undefined) return v;
+      let cur = data;
+      for (const p of parts) {
+        if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
+        cur = cur[p];
+      }
+      if (cur !== undefined) return cur;
     }
   }
   const resolvedPath = applyFieldTemplate(raw, variables);
