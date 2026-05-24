@@ -1,7 +1,5 @@
 # IP 信息查询接口（/v1/ipinfo）
 
-查询 IP 的地理位置及 ISP 信息，多上游自动容灾。
-
 ## 端点
 
 | 方法 | 路径 | 说明 |
@@ -13,36 +11,32 @@
 ## 调用示例
 
 ```bash
-# 查询当前 IP
 curl http://api.mfawa.top/v1/ipinfo
-
-# 查询指定 IP
-curl http://api.mfawa.top/v1/ipinfo?ip=8.8.8.8
+curl http://api.mfawa.top/v1/ipinfo?ip=114.114.114.114
 ```
 
 ## 响应
 
 ```json
 {
-  "source": "ip9",
+  "source": "bt.cn",
   "data": {
-    "ip": "1.1.1.1",
-    "country": "澳大利亚",
-    "prov": "昆士兰州",
-    "city": "布里斯班",
+    "ip": "114.114.114.114",
+    "country": "中国",
+    "prov": "江苏",
+    "city": "南京",
     "district": "",
-    "isp": "APNIC",
-    "lon": "153.021072",
-    "lat": "-27.470125"
-  },
-  "raw_data": {}
+    "isp": "114DNS",
+    "lon": "118.767413",
+    "lat": "32.041544"
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `source` | string | 数据来源 API 名称 |
-| `data.ip` | string | 查询的 IP（缓存命中时注入） |
+| `source` | string | 数据来源 API |
+| `data.ip` | string | 查询的 IP |
 | `data.country` | string | 国家 |
 | `data.prov` | string | 省份 |
 | `data.city` | string | 城市 |
@@ -50,7 +44,8 @@ curl http://api.mfawa.top/v1/ipinfo?ip=8.8.8.8
 | `data.isp` | string | ISP 运营商 |
 | `data.lon` | string | 经度 |
 | `data.lat` | string | 纬度 |
-| `raw_data` | object | 上游原始响应 |
+
+字段为空字符串表示该上游未返回此信息。
 
 ## 错误响应
 
@@ -63,10 +58,8 @@ curl http://api.mfawa.top/v1/ipinfo?ip=8.8.8.8
 { "error": "所有API不可用" }
 ```
 
-## 功能特性
+```json
+{ "error": "请求过于频繁，请稍后重试" }
+```
 
-- **多上游容灾**：配置多个 IP 查询 API，自动故障切换。
-- **负载均衡**：`round_robin`（轮询）、`random`（随机）、`least_used`（最少使用）。
-- **重试机制**：上游失败自动尝试下一个，可配置重试轮数。
-- **/24 网段缓存**：同 C 段 IP 共享缓存，默认 7 天。
-- **Redis 共享**：Redis 启用时多 worker 共享同一份缓存。
+上游失败时自动重试其他 API，最多重试 3 轮。全部失败才返回 500。

@@ -1,7 +1,5 @@
 # 天气接口（/v1/weather）
 
-实时天气 + 7 天预报，IP 自动定位城市，多源聚合备份。
-
 ## 端点
 
 | 方法 | 路径 | 说明 |
@@ -10,31 +8,26 @@
 | `GET` | `/v1/weather/realtime` | 仅实时天气 |
 | `GET` | `/v1/weather/week` | 仅 7 天预报 |
 
-## 通用参数
+## 参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `city` | string | 城市名称，如 `北京`、`上海` |
 | `ip` | string | 根据 IP 自动定位城市 |
 
-> `city` 和 `ip` 都不传时，使用请求来源 IP 定位。
+`city` 和 `ip` 都不传时，使用请求来源 IP 定位。
 
 ## 调用示例
 
 ```bash
-# 综合查询
 curl 'http://api.mfawa.top/v1/weather?city=北京'
-
-# 仅实时天气
 curl 'http://api.mfawa.top/v1/weather/realtime?city=上海'
-
-# 自动定位
 curl http://api.mfawa.top/v1/weather
 ```
 
 ## 响应
 
-### 综合查询（`/v1/weather`）
+### 综合查询
 
 ```json
 {
@@ -92,18 +85,12 @@ curl http://api.mfawa.top/v1/weather
 | `wind` | 风向 |
 | `windSpeed` | 风力 |
 
-## 功能特性
-
-- **城市自动识别**：`city` 参数直接查询，`ip` 参数 / 来源 IP 自动定位。
-- **多源备份**：实时天气支持 MSN、高德、52vmy 等；预报支持 CMA、Sojson。
-- **故障转移**：上游不可用时自动切换备用源。
-
 ## 错误响应
 
 | 状态码 | 场景 |
 |--------|------|
 | `400` | 未找到匹配城市 |
-| `500` | 所有上游均不可用 |
+| `500` | 上游接口不可用 |
 | `429` | 触发限流 |
 
 ```json
