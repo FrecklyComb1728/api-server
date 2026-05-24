@@ -29,12 +29,15 @@ log "开始部署..."
 cd "$REPO_DIR"
 PREV_COMMIT=$(git rev-parse --short HEAD)
 log "当前版本: $PREV_COMMIT"
-if ! git fetch origin main 2>&1; then
-  log_stderr "git fetch 失败"
+if ! GIT_FETCH_ERR=$(git fetch origin main 2>&1); then
+  log_stderr "git fetch 失败: $GIT_FETCH_ERR"
+  if echo "$GIT_FETCH_ERR" | grep -qi "read-only\|Read-only"; then
+    log_stderr "→ 文件系统只读，检查 webhook systemd 服务的 ReadWritePaths 是否包含项目目录"
+  fi
   exit 1
 fi
-if ! git reset --hard origin/main 2>&1; then
-  log_stderr "git reset 失败"
+if ! GIT_RESET_ERR=$(git reset --hard origin/main 2>&1); then
+  log_stderr "git reset 失败: $GIT_RESET_ERR"
   exit 1
 fi
 NEW_COMMIT=$(git rev-parse --short HEAD)
