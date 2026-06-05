@@ -1,5 +1,5 @@
 [{
-  "id": "deploy",
+  "id": "api-server",
   "execute-command": "/opt/api-server/deploy.sh",
   "command-working-directory": "/opt/api-server",
   "response-message": "deploying",
