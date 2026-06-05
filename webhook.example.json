@@ -1,6 +1,6 @@
 [{
   "id": "api-server",
-  "execute-command": "/opt/api-server/deploy.sh",
+  "execute-command": "bash deploy.sh",
   "command-working-directory": "/opt/api-server",
   "response-message": "deploying",
   "pass-arguments-to-command": [],

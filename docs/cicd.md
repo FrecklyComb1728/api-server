@@ -92,7 +92,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/api-server /tmp
+ReadWritePaths=/
 
 [Install]
 WantedBy=multi-user.target
