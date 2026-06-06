@@ -86,16 +86,20 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/api-server
-ExecStart=/usr/local/bin/webhook -hooks /opt/api-server/webhook.json -port 9000
+ExecStart=/usr/local/bin/webhook \
+  -hooks /opt/api-server/webhook.json \
+  -port 9000 
 Restart=always
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/
 
 [Install]
 WantedBy=multi-user.target
+```
+
+如果需要更改 URL 前缀（如 `/webhook`），请在 `ExecStart` 中添加 `-urlprefix "/webhook"`。
+```ini
+  -urlprefix "/webhook"
 ```
 
 启用：
