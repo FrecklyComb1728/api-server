@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const logger = require('../../utils/logger');
 const { getStore } = require('../../libs/cacheStore');
@@ -11,15 +12,55 @@ const config = require(configPath);
 
 const cache = getStore();
 const CACHE_PREFIX = 'ipinfo:';
+const IP_VERSION_VALUES = new Map([
+  ['ipv4', 4],
+  ['ipv6', 6]
+]);
 let lastUsedApiIndex = -1;
-const apiRequestCounters = {};
+const apiRequestCounters = Object.create(null);
+const apiIpVersions = new Map();
+const apiNames = new Set();
+if (!Array.isArray(config.upstream_apis)) {
+  throw new Error('upstream_apis 必须是数组');
+}
 config.upstream_apis.forEach(api => {
+  if (!api || typeof api.name !== 'string' || !api.name.trim()) {
+    throw new Error('每个 upstream API 必须配置非空 name');
+  }
+  const apiName = api.name.trim();
+  if (apiNames.has(apiName)) {
+    throw new Error(`upstream API 名称重复: ${apiName}`);
+  }
+  apiNames.add(apiName);
+  apiIpVersions.set(api.name, parseIpVersions(api));
   apiRequestCounters[api.name] = {
     count: 0,
     windowStartTime: Date.now(),
     isAvailable: api.enabled
   };
 });
+
+function parseIpVersions(api) {
+  if (api.ip_versions === undefined) {
+    return new Set(IP_VERSION_VALUES.values());
+  }
+  if (typeof api.ip_versions !== 'string') {
+    throw new Error(`API ${api.name} 的 ip_versions 必须是逗号分隔的字符串`);
+  }
+  const configuredVersions = api.ip_versions
+    .split(',')
+    .map(version => version.trim().toLowerCase())
+    .filter(Boolean);
+  const unknownVersion = configuredVersions.find(version => !IP_VERSION_VALUES.has(version));
+  if (unknownVersion) {
+    throw new Error(`API ${api.name} 的 ip_versions 包含未知值: ${unknownVersion}`);
+  }
+  return new Set(configuredVersions.map(version => IP_VERSION_VALUES.get(version)));
+}
+
+function supportsIpVersion(apiName, ipVersion) {
+  return apiIpVersions.get(apiName)?.has(ipVersion) === true;
+}
 
 function resetRequestCounter(apiName) {
   const api = config.upstream_apis.find(a => a.name === apiName);
@@ -35,6 +76,7 @@ function isApiAvailable(apiName) {
   const api = config.upstream_apis.find(a => a.name === apiName);
   if (!api || !api.enabled) return false;
   const counter = apiRequestCounters[apiName];
+  if (!counter) return false;
   const now = Date.now();
   if (now - counter.windowStartTime > api.time_window * 1000) {
     resetRequestCounter(apiName);
@@ -43,8 +85,10 @@ function isApiAvailable(apiName) {
   return counter.count < api.max_requests;
 }
 
-function getAvailableApis() {
-  return config.upstream_apis.filter(api => isApiAvailable(api.name));
+function getAvailableApis(ipVersion) {
+  return config.upstream_apis.filter(api => (
+    supportsIpVersion(api.name, ipVersion) && isApiAvailable(api.name)
+  ));
 }
 
 function selectNextApi(availableApis) {
@@ -178,7 +222,7 @@ async function safeQueryIpInfo(ip, apiConfig) {
   }
   incrementApiCounter(apiConfig.name);
   try {
-    const url = apiConfig.url.replace('{ip}', ip);
+    const url = apiConfig.url.replaceAll('{ip}', encodeURIComponent(ip));
     const response = await axios.get(url, { timeout: config.default_timeout });
     const standardData = mapResponseToStandardFormat(response.data, apiConfig.field_mapping, { ip });
     const filteredData = {};
@@ -199,16 +243,47 @@ async function safeQueryIpInfo(ip, apiConfig) {
   }
 }
 
+function isIpv4MappedIpv6(ip) {
+  if (net.isIP(ip) !== 6) {
+    return false;
+  }
+  const address = ip.split('%', 1)[0];
+  try {
+    const hostname = new URL(`http://[${address}]`).hostname.toLowerCase();
+    return /^\[::ffff:[\da-f]{1,4}:[\da-f]{1,4}\]$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function parseIp(ip) {
+  const normalizedIp = String(ip || '').trim();
+  const ipVersion = net.isIP(normalizedIp);
+  if (ipVersion === 0) {
+    const error = new Error('无效的IP地址');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (isIpv4MappedIpv6(normalizedIp)) {
+    const error = new Error('不支持IPv4映射IPv6地址');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { normalizedIp, ipVersion };
+}
+
 async function queryIpInfoWithRetry(ip) {
-  const cachedData = await getFromCache(ip);
+  const { normalizedIp, ipVersion } = parseIp(ip);
+  const cachedData = await getFromCache(normalizedIp);
   if (cachedData) {
-    logger.debug(`IP缓存命中`, { ip });
+    logger.debug(`IP缓存命中`, { ip: normalizedIp });
     return cachedData;
   }
-  let availableApis = getAvailableApis();
+  let availableApis = getAvailableApis(ipVersion);
   if (availableApis.length === 0) {
-    const err = new Error('所有API不可用');
+    const err = new Error(`没有支持 IPv${ipVersion} 的可用API`);
     err.source = '系统';
+    err.statusCode = 503;
     throw err;
   }
   let result;
@@ -216,11 +291,11 @@ async function queryIpInfoWithRetry(ip) {
   let retryRound = 0;
   let triedApis = new Set();
   while (retryRound <= config.retry_count) {
-    availableApis = getAvailableApis().filter(api => !triedApis.has(api.name));
+    availableApis = getAvailableApis(ipVersion).filter(api => !triedApis.has(api.name));
     if (availableApis.length === 0) {
       if (retryRound < config.retry_count) {
         triedApis.clear();
-        availableApis = getAvailableApis();
+        availableApis = getAvailableApis(ipVersion);
         retryRound++;
         await new Promise(resolve => setTimeout(resolve, 100));
       } else {
@@ -235,9 +310,9 @@ async function queryIpInfoWithRetry(ip) {
       break;
     }
     try {
-      result = await safeQueryIpInfo(ip, selectedApi);
-      logger.debug(`IP查询成功`, { source: result.source, ip });
-      await saveToCache(ip, result);
+      result = await safeQueryIpInfo(normalizedIp, selectedApi);
+      logger.debug(`IP查询成功`, { source: result.source, ip: normalizedIp });
+      await saveToCache(normalizedIp, result);
       return result;
     } catch (error) {
       logger.warn(`IP查询上游失败`, { source: selectedApi.name, error: error.message, attempt: retryRound + 1 });
@@ -250,6 +325,7 @@ async function queryIpInfoWithRetry(ip) {
   } else {
     const err = new Error('查询失败');
     err.source = '系统';
+    err.statusCode = 503;
     throw err;
   }
 }
@@ -282,12 +358,11 @@ function getClientIp(req) {
 }
 
 async function handleIpQuery(ip, res) {
-  const normalizedIp = String(ip || '').trim();
   try {
-    const result = await queryIpInfoWithRetry(normalizedIp);
+    const result = await queryIpInfoWithRetry(ip);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 }
 
@@ -313,7 +388,8 @@ module.exports.meta = {
   name: 'IP 信息',
   description: '多上游容灾，自动重试',
   endpoints: [
-    { method: 'GET', path: '/', description: '查询当前 IP', params: '?ip=x.x.x.x' },
+    { method: 'GET', path: '', description: '查询 当前/指定 IP', params: '?ip=x.x.x.x' },
+    { method: 'GET', path: '/', description: '查询 当前/指定 IP', params: '?ip=x.x.x.x' },
     { method: 'GET', path: '/:ip', description: '查询指定 IP', params: '路径参数' }
   ]
 };

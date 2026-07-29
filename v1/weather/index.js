@@ -537,7 +537,7 @@ router.get('/realtime', async (req, res) => {
     }
     res.json({ success: true, data: { realtime } });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    res.status(e?.statusCode || 500).json({ success: false, message: String(e?.message || e) });
   }
 });
 
@@ -553,7 +553,7 @@ router.get('/week', async (req, res) => {
     }
     res.json({ success: true, data: { week } });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    res.status(e?.statusCode || 500).json({ success: false, message: String(e?.message || e) });
   }
 });
 
@@ -569,7 +569,7 @@ router.get('/', async (req, res) => {
     }
     res.json({ success: true, data });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    res.status(e?.statusCode || 500).json({ success: false, message: String(e?.message || e) });
   }
 });
 
