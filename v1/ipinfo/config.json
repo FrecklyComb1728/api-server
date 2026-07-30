@@ -28,7 +28,7 @@
       "url": "https://www.bt.cn/api/panel/get_ip_info?ip={ip}",
       "max_requests": 50,
       "time_window": 60,
-      "enabled": false,
+      "enabled": true,
       "ip_versions": "IPv4",
       "field_mapping": {
         "ip": "{ip}",

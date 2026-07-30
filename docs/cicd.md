@@ -20,9 +20,9 @@
 npm install -g pm2
 
 # 下载 webhook（二进制文件）
-sudo curl -L -o /usr/local/bin/webhook \
+sudo curl -L -o /tmp/webhook-linux-amd64.tar.gz \
   https://github.com/adnanh/webhook/releases/download/2.8.2/webhook-linux-amd64.tar.gz
-sudo tar -xzf /usr/local/bin/webhook -C /tmp
+sudo tar -xzf /tmp/webhook-linux-amd64.tar.gz -C /tmp/
 sudo mv /tmp/webhook-linux-amd64/webhook /usr/local/bin/webhook
 sudo chmod +x /usr/local/bin/webhook
 ```
@@ -35,8 +35,8 @@ git clone https://github.com/FrecklyComb1728/api-server.git
 cd api-server
 
 # 从示例文件创建实际配置
-cp server-config.example.json server-config.json
-# 编辑 server-config.json 调整配置
+cp server-config.example.json server-config.json && cp ecosystem.config.example.js ecosystem.config.js
+# 编辑 server-config.json 和 ecosystem.config.js 调整配置
 
 npm ci --registry=https://registry.npmmirror.com
 pm2 start ecosystem.config.js

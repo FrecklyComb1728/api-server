@@ -3,3 +3,4 @@
 logs/
 server-config.json
 webhook.json
+ecosystem.config.js

@@ -1,9 +1,11 @@
 [{
   "id": "api-server",
-  "execute-command": "bash deploy.sh",
-  "command-working-directory": "/opt/api-server",
+  "command-working-directory": "/opt/mifeng-api",
   "response-message": "deploying",
-  "pass-arguments-to-command": [],
+  "execute-command": "/bin/bash",
+  "pass-arguments-to-command": [
+    { "source": "string", "name": "deploy.sh" }
+  ],
   "trigger-rule": {
     "and": [
       {
