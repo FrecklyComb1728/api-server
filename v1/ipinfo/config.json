@@ -80,7 +80,7 @@
       "url": "https://api.52vmy.cn/api/query/itad/pro?ip={ip}",
       "max_requests": 50,
       "time_window": 60,
-      "enabled": true,
+      "enabled": false,
       "ip_versions": "IPv6,IPv4",
       "field_mapping": {
         "ip": "ip",
