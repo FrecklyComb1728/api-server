@@ -25,7 +25,7 @@ async function createApp() {
       logger.info('Redis 连接成功', { host: redisCfg.host, port: redisCfg.port });
     } catch (err) {
       logger.error('Redis 连接失败，拒绝启动', { error: err.message });
-      process.exit(1);
+      throw err;
     }
   }
 
@@ -37,6 +37,11 @@ async function createApp() {
   rateLimitStore.init(mode, redis, prefix);
 
   const app = express();
+  app.disable('x-powered-by');
+  app.set(
+    'trust proxy',
+    Object.prototype.hasOwnProperty.call(config, 'trustProxy') ? config.trustProxy : 'loopback'
+  );
 
   app.use(urlDecoderMiddleware);
   app.use(corsMiddleware);
@@ -58,7 +63,11 @@ async function createApp() {
 
   loadApis(app, config);
 
-  const markdownTemplate = path.join(process.cwd(), config?.markdown?.templatePath || 'template/markdown.html');
+  const markdownTemplate = path.resolve(
+    __dirname,
+    '..',
+    config?.markdown?.templatePath || 'template/markdown.html'
+  );
   const renderer = new MarkdownRenderer(markdownTemplate);
   setupStaticRoutes(app, config, renderer);
 
@@ -67,10 +76,12 @@ async function createApp() {
   return {
     app,
     limiter,
-    destroy: () => {
+    destroy: async () => {
       if (redisEnabled) {
-        redisClient.destroy();
+        await redisClient.destroy();
       }
+      cacheStore.getStore().destroy();
+      await logger.destroy();
     }
   };
 }

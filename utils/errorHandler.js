@@ -3,6 +3,13 @@ const path = require('path');
 const config = require('./configLoader');
 const logger = require('./logger');
 
+const templatePath = path.resolve(
+  __dirname,
+  '..',
+  config?.error?.templatePath || 'template/error.html'
+);
+let templatePromise = null;
+
 const errorMessages = {
   400: {
     message: '错误的请求',
@@ -46,21 +53,24 @@ const errorMessages = {
   }
 };
 
-function sendError(res, statusCode) {
+async function sendError(res, statusCode) {
   const errorInfo = errorMessages[statusCode] || errorMessages[500];
-  const templatePath = path.join(process.cwd(), config?.error?.templatePath || 'template/error.html');
 
   try {
-    const template = fs.readFileSync(templatePath, 'utf-8');
+    if (!templatePromise) {
+      templatePromise = fs.promises.readFile(templatePath, 'utf-8');
+    }
+    const template = await templatePromise;
     const html = template
       .replace(/\$\{projectName\}/g, () => config.projectName)
       .replace(/\$\{code\}/g, () => statusCode)
       .replace(/\$\{message\}/g, () => errorInfo.message)
       .replace(/\$\{description\}/g, () => errorInfo.description);
 
-    res.status(statusCode).send(html);
+    return res.status(statusCode).send(html);
   } catch (error) {
-    res.status(statusCode).json({
+    templatePromise = null;
+    return res.status(statusCode).json({
       code: statusCode,
       message: errorInfo.message,
       description: errorInfo.description

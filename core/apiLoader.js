@@ -5,7 +5,7 @@ const { sendError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 
 function loadApis(app, config) {
-  const apiRoot = path.join(process.cwd(), config.apiDir || 'v1');
+  const apiRoot = path.resolve(__dirname, '..', config.apiDir || 'v1');
   if (!fs.existsSync(apiRoot)) {
     return;
   }

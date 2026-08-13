@@ -1,15 +1,17 @@
 const config = require('./configLoader');
 const { sendError } = require('./errorHandler');
 const logger = require('./logger');
-const { getStore } = require('../libs/rateLimitStore');
+const { createMemoryStore, getStore } = require('../libs/rateLimitStore');
 
 class RateLimiter {
   constructor(rateLimitConfig) {
-    this.enabled = rateLimitConfig.enabled !== false;
-    this.timeWindow = rateLimitConfig.timeWindow || 60;
-    this.maxRequests = rateLimitConfig.maxRequests || 100;
-    this.ipHeader = rateLimitConfig.ipHeader === undefined ? 'X-Forwarded-For' : rateLimitConfig.ipHeader;
+    const configuredWindow = Number(rateLimitConfig.timeWindow);
+    const configuredMax = Number(rateLimitConfig.maxRequests);
+    this.enabled = rateLimitConfig.enabled !== false && rateLimitConfig.enabled !== 'false';
+    this.timeWindow = configuredWindow > 0 ? configuredWindow : 60;
+    this.maxRequests = Number.isFinite(configuredMax) ? configuredMax : 100;
     this.store = getStore();
+    this.fallbackStore = createMemoryStore();
     this.apiPrefix = `/${config.apiDir || 'v1'}`;
 
     if (this.enabled && this.maxRequests > 0) {
@@ -20,42 +22,39 @@ class RateLimiter {
   }
 
   getClientIP(req) {
-    if (this.ipHeader) {
-      const forwardedIP = req.get(this.ipHeader);
-      if (forwardedIP) {
-        const first = String(forwardedIP)
-          .split(',')
-          .map(v => v.trim())
-          .filter(Boolean)[0];
-        if (first) return first;
-      }
-    }
-    return req.ip || req.connection.remoteAddress || '0.0.0.0';
+    return req.ip || '0.0.0.0';
   }
 
   async check(ip) {
     if (!this.enabled || this.maxRequests <= 0) {
       return { allowed: true };
     }
-    return this.store.check(`ratelimit:${ip}`, this.timeWindow, this.maxRequests);
+    const key = `ratelimit:${ip}`;
+    try {
+      return await this.store.check(key, this.timeWindow, this.maxRequests);
+    } catch (error) {
+      logger.error(`限流存储异常，使用本地限流`, { error: error.message });
+      return this.fallbackStore.check(key, this.timeWindow, this.maxRequests);
+    }
   }
 
   destroy() {
     if (this.store && typeof this.store.destroy === 'function') {
       this.store.destroy();
     }
+    this.fallbackStore.destroy();
   }
 
   middleware() {
     return (req, res, next) => {
-      if (!this.enabled || this.maxRequests === 0) {
+      if (!this.enabled || this.maxRequests <= 0) {
         return next();
       }
 
       const ip = this.getClientIP(req);
       this.check(ip).then(result => {
         if (!result.allowed) {
-          logger.warn(`限流触发`, { ip, count: `${this.maxRequests}/${this.timeWindow}s` });
+          logger.debug(`限流触发`, { count: `${this.maxRequests}/${this.timeWindow}s` });
           if (req.path.startsWith(this.apiPrefix)) {
             return res.status(429).json({ status: 'error', time: Date.now(), message: '请求过于频繁，请稍后重试' });
           }
@@ -63,8 +62,11 @@ class RateLimiter {
         }
         next();
       }).catch(err => {
-        logger.warn(`限流器检查异常，放行请求`, { ip, error: err.message });
-        next();
+        logger.error(`限流器检查异常`, { error: err.message });
+        if (req.path.startsWith(this.apiPrefix)) {
+          return res.status(503).json({ status: 'error', time: Date.now(), message: '限流服务暂不可用' });
+        }
+        return sendError(res, 503);
       });
     };
   }

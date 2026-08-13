@@ -1,10 +1,27 @@
 class MemoryStore {
   constructor() {
     this.store = new Map();
+    this.cleanupTimer = setInterval(() => this._deleteExpired(), 60000);
+    this.cleanupTimer.unref();
   }
 
   _now() {
     return Date.now();
+  }
+
+  _deleteExpired() {
+    const now = this._now();
+    for (const [key, entry] of this.store.entries()) {
+      if (entry.expiresAt > 0 && now > entry.expiresAt) {
+        this.store.delete(key);
+      }
+    }
+  }
+
+  _ensureCleanupTimer() {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => this._deleteExpired(), 60000);
+    this.cleanupTimer.unref();
   }
 
   async get(key) {
@@ -18,6 +35,7 @@ class MemoryStore {
   }
 
   async set(key, value, ttlSeconds) {
+    this._ensureCleanupTimer();
     const ttl = Number(ttlSeconds);
     this.store.set(key, {
       value,
@@ -27,6 +45,13 @@ class MemoryStore {
 
   async del(key) {
     this.store.delete(key);
+  }
+
+  async delIfValue(key, value) {
+    const entry = this.store.get(key);
+    if (!entry || entry.value !== value) return false;
+    this.store.delete(key);
+    return true;
   }
 
   async has(key) {
@@ -40,9 +65,15 @@ class MemoryStore {
   }
 
   async setNX(key, value, ttlSeconds) {
-    const exists = await this.has(key);
-    if (exists) return false;
-    await this.set(key, value, ttlSeconds);
+    this._ensureCleanupTimer();
+    const entry = this.store.get(key);
+    if (entry && (entry.expiresAt === 0 || this._now() <= entry.expiresAt)) return false;
+    if (entry) this.store.delete(key);
+    const ttl = Number(ttlSeconds);
+    this.store.set(key, {
+      value,
+      expiresAt: ttl > 0 ? this._now() + ttl * 1000 : 0
+    });
     return true;
   }
 
@@ -51,6 +82,10 @@ class MemoryStore {
   }
 
   destroy() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     this.store.clear();
   }
 }
@@ -88,6 +123,16 @@ class RedisStore {
 
   async del(key) {
     await this.redis.del(this._key(key));
+  }
+
+  async delIfValue(key, value) {
+    const result = await this.redis.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      this._key(key),
+      JSON.stringify(value)
+    );
+    return result === 1;
   }
 
   async has(key) {

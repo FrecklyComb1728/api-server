@@ -15,6 +15,7 @@ class Logger {
     this._initialized = false;
     this._buffer = [];
     this._flushTimer = null;
+    this._flushPromise = Promise.resolve();
     _instance = this;
   }
 
@@ -33,10 +34,15 @@ class Logger {
     this.level = LEVELS[resolved] ?? 2;
 
     this.file = config.file === true || config.file === 'true';
-    this.dir = config.dir || 'logs';
+    const logDir = config.dir || 'logs';
+    this.dir = path.isAbsolute(logDir) ? logDir : path.resolve(__dirname, '..', logDir);
 
     if (this.file) {
-      this._flushTimer = setInterval(() => this._flush(), 200);
+      this._flushTimer = setInterval(() => {
+        this.flush().catch(error => {
+          console.error('日志写入文件失败:', error.message);
+        });
+      }, 200);
       this._flushTimer.unref();
     }
 
@@ -68,7 +74,7 @@ class Logger {
       const parts = [];
       for (const [k, v] of Object.entries(extra)) {
         if (v !== undefined) {
-          const val = String(v).replace(/\n/g, '\\n');
+          const val = String(v).replace(/\r?\n/g, '\\n').replace(/\r/g, '\\r');
           parts.push(`${k}=${val}`);
         }
       }
@@ -80,7 +86,7 @@ class Logger {
   _output(levelNum, message, extra) {
     if (levelNum > this.level) return;
 
-    const cleanMsg = String(message || '').replace(/\n/g, '\\n');
+    const cleanMsg = String(message || '').replace(/\r?\n/g, '\\n').replace(/\r/g, '\\r');
     const line = this._buildLine(LEVEL_NAMES[levelNum], cleanMsg, extra);
     if (process.env.IS_PRIMARY_WORKER !== '0') {
       console.log(line);
@@ -96,39 +102,41 @@ class Logger {
     }
   }
 
-  _flush() {
+  async _flush() {
     if (this._buffer.length === 0) return;
     const lines = this._buffer.splice(0);
-    try {
-      for (const { line, monthStr, dateStr } of lines) {
-        const monthDir = path.join(this.dir, monthStr);
-        if (!fs.existsSync(monthDir)) {
-          fs.mkdirSync(monthDir, { recursive: true });
-        }
-        const filePath = path.join(monthDir, `${dateStr}.log`);
-        fs.appendFileSync(filePath, line + '\n', 'utf-8');
+    const batches = new Map();
+    for (const { line, monthStr, dateStr } of lines) {
+      const filePath = path.join(this.dir, monthStr, `${dateStr}.log`);
+      if (!batches.has(filePath)) {
+        batches.set(filePath, []);
       }
-    } catch (e) {
-      console.error('日志写入文件失败:', e.message);
+      batches.get(filePath).push(line);
     }
+
+    await Promise.all(Array.from(batches, async ([filePath, fileLines]) => {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.appendFile(filePath, `${fileLines.join('\n')}\n`, 'utf-8');
+    }));
+  }
+
+  flush() {
+    this._flushPromise = this._flushPromise.catch(() => {}).then(() => this._flush());
+    return this._flushPromise;
+  }
+
+  async destroy() {
+    if (this._flushTimer) {
+      clearInterval(this._flushTimer);
+      this._flushTimer = null;
+    }
+    await this.flush();
   }
 
   error(message, extra) { this._output(0, message, extra); }
   warn(message, extra)  { this._output(1, message, extra); }
   info(message, extra)  { this._output(2, message, extra); }
   debug(message, extra) { this._output(3, message, extra); }
-
-  child(req) {
-    const self = this;
-    const rid = req.rid || '-';
-    const pid = process.pid;
-    return {
-      error(m, e) { self.error(m, { rid, pid, ...(e || {}) }); },
-      warn(m, e)  { self.warn(m,  { rid, pid, ...(e || {}) }); },
-      info(m, e)  { self.info(m,  { rid, pid, ...(e || {}) }); },
-      debug(m, e) { self.debug(m, { rid, pid, ...(e || {}) }); },
-    };
-  }
 
   middleware() {
     const self = this;
@@ -138,7 +146,7 @@ class Logger {
       const url = req.originalUrl || req.url;
       const rid = req.rid || '-';
       const pid = process.pid;
-      const ip = req.ip || req.connection?.remoteAddress || '-';
+      const ip = req.ip || '-';
 
       res.on('finish', () => {
         const duration = Date.now() - start;

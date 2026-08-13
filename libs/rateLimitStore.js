@@ -1,9 +1,29 @@
 class MemoryRateLimitStore {
   constructor() {
     this.records = new Map();
+    this.expirations = new Map();
+    this.cleanupTimer = null;
+    this._ensureCleanupTimer();
+  }
+
+  _ensureCleanupTimer() {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => this._deleteExpired(), 60000);
+    this.cleanupTimer.unref();
+  }
+
+  _deleteExpired() {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.expirations.entries()) {
+      if (now > expiresAt) {
+        this.records.delete(key);
+        this.expirations.delete(key);
+      }
+    }
   }
 
   async check(key, windowSeconds, maxRequests) {
+    this._ensureCleanupTimer();
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
     const windowStart = now - windowMs;
@@ -24,6 +44,7 @@ class MemoryRateLimitStore {
       recent.push(now);
       this.records.set(key, recent);
     }
+    this.expirations.set(key, now + windowMs);
 
     return {
       allowed,
@@ -33,7 +54,12 @@ class MemoryRateLimitStore {
   }
 
   destroy() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     this.records.clear();
+    this.expirations.clear();
   }
 }
 
@@ -53,7 +79,7 @@ class RedisRateLimitStore {
       local count = redis.call('ZCARD', key)
       local allowed = 0
       if count < max then
-        redis.call('ZADD', key, now, now .. ':' .. math.random(1000000))
+        redis.call('ZADD', key, now, now .. ':' .. count)
         count = count + 1
         allowed = 1
       end
@@ -118,4 +144,8 @@ function getStore() {
   return storeInstance;
 }
 
-module.exports = { init, getStore };
+function createMemoryStore() {
+  return new MemoryRateLimitStore();
+}
+
+module.exports = { init, getStore, createMemoryStore };
