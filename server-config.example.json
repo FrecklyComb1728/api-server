@@ -1,6 +1,8 @@
 {
   "projectName": "API Server",
+  "host": "127.0.0.1",
   "port": 8633,
+  "trustProxy": "loopback",
   "staticDir": "public",
   "apiDir": "v1",
   "index": {
@@ -20,8 +22,7 @@
   "rateLimit": {
     "enabled": true,
     "timeWindow": 60,
-    "maxRequests": 100,
-    "ipHeader": "X-Forwarded-For"
+    "maxRequests": 100
   },
   "cluster": {
     "enabled": true,
@@ -35,5 +36,4 @@
     "db": 0,
     "keyPrefix": "api-server:"
   }
-}
 }
