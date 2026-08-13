@@ -52,9 +52,10 @@ pm2 startup -u api-server --hp /home/api-server
 
 `deploy.sh` 已包含在项目中，功能：
 
-- 加锁防并发部署
-- `git fetch` → `git reset --hard` 拉取最新代码
-- 在 `package.json` 或 `package-lock.json` 变动时重新 `npm ci`
+- `flock` 原子锁防并发部署；锁被占用时排队等待，前一个实例完成后接管
+- `git fetch` 后比较远程 HEAD 与本地 HEAD，无变更时跳过
+- 部署期间若有新 push，循环追赶最新代码（最多 5 轮），排队实例可继续接管，避免并发触发导致漏部署
+- `package.json`、`package-lock.json` 任一变动时重新 `npm ci`
 - `pm2 reload` 零停机重启
 
 设置权限：
