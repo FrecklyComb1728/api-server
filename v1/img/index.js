@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const path = require('path');
 const HttpClient = require('../../utils/httpClient');
 const logger = require('../../utils/logger');
@@ -13,6 +14,7 @@ const cache = getStore();
 const CACHE_PREFIX = 'img:';
 const LOCK_PREFIX = 'img:lock:';
 const LOCK_TTL = 30;
+const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 const inflights = { horizontal: null, vertical: null };
 
@@ -113,33 +115,14 @@ function ttlSec() {
 
 function isCacheFresh(data, now, ttl) {
   if (ttl <= 0) return false;
-  if (!data || !data.items || data.items.length === 0) return false;
+  if (!data || data.items.length === 0) return false;
   return now - (data.fetchedAt || 0) < ttl;
-}
-
-function getLegacyUpstreamUrl(pathValue) {
-  const base = String(config?.upstream_url || '').trim();
-  if (!base) return '';
-  try {
-    const u = new URL(base);
-    const p = String(pathValue ?? '').trim() || '/background';
-    u.searchParams.set('path', p);
-    return u.toString();
-  } catch {
-    return '';
-  }
 }
 
 function getUpstreamUrl(orientation) {
   const o = normalizeOrientation(orientation);
   const upstream = config?.upstream && typeof config.upstream === 'object' ? config.upstream : null;
-  const fromNew = upstream ? String(upstream[o] || '').trim() : '';
-  if (fromNew) return fromNew;
-
-  const legacyPath = String(config?.upstream_path || '/background').trim() || '/background';
-  if (o === 'horizontal') return getLegacyUpstreamUrl(legacyPath);
-  const derived = legacyPath === '/background' ? '/background-phone' : legacyPath.replace(/\/background$/g, '/background-phone');
-  return getLegacyUpstreamUrl(derived || '/background-phone');
+  return upstream ? String(upstream[o] || '').trim() : '';
 }
 
 function getUpstreamHeaders(orientation) {
@@ -152,6 +135,27 @@ function getUpstreamHeaders(orientation) {
   return { ...(base || {}), ...(h || {}) };
 }
 
+function normalizeCachedData(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!Array.isArray(value.items) || !Number.isFinite(Number(value.fetchedAt))) return null;
+
+  const baseUrl = normalizeBaseUrl(config?.url);
+  if (!baseUrl) return null;
+  const items = value.items.reduce((result, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return result;
+    const itemPath = normalizePath(item.path);
+    if (!itemPath) return result;
+    result.push({ name: String(item.name ?? '').trim(), path: itemPath });
+    return result;
+  }, []);
+  return {
+    items,
+    urls: items.map(item => `${baseUrl}${item.path}`),
+    fetchedAt: Number(value.fetchedAt),
+    baseUrl
+  };
+}
+
 async function startRefresh(orientation) {
   const o = normalizeOrientation(orientation);
 
@@ -162,18 +166,25 @@ async function startRefresh(orientation) {
   const ttl = ttlSec();
 
   inflights[o] = (async () => {
-    const locked = await cache.setNX(lok, '1', LOCK_TTL);
-
-    if (!locked) {
-      const deadline = Date.now() + LOCK_TTL * 1000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 200));
-        const data = await cache.get(key);
-        if (data) return data;
-      }
-    }
-
+    const lockToken = crypto.randomUUID();
+    let locked = false;
     try {
+      locked = await cache.setNX(lok, lockToken, LOCK_TTL);
+      if (!locked) {
+        const deadline = Date.now() + LOCK_TTL * 1000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 200));
+          const cachedData = normalizeCachedData(await cache.get(key));
+          if (cachedData) return cachedData;
+        }
+        locked = await cache.setNX(lok, lockToken, LOCK_TTL);
+        if (!locked) {
+          const err = new Error('图片列表正在刷新');
+          err.statusCode = 503;
+          throw err;
+        }
+      }
+
       logger.debug(`刷新图片列表: ${o}`);
 
       const baseUrl = normalizeBaseUrl(config?.url);
@@ -220,7 +231,11 @@ async function startRefresh(orientation) {
       throw e;
     } finally {
       if (locked) {
-        await cache.del(lok);
+        try {
+          await cache.delIfValue(lok, lockToken);
+        } catch (error) {
+          logger.warn('图片刷新锁释放失败', { error: error.message });
+        }
       }
       inflights[o] = null;
     }
@@ -235,10 +250,10 @@ async function getCacheNonBlocking(orientation) {
   const now = Date.now();
   const ttl = ttlMs();
 
-  const data = await cache.get(key);
+  const data = normalizeCachedData(await cache.get(key));
   if (data && isCacheFresh(data, now, ttl)) return data;
 
-  if (data && data.items && data.items.length > 0) {
+  if (data && data.items.length > 0) {
     startRefresh(o).catch(() => {});
     return data;
   }
@@ -276,8 +291,13 @@ async function sendRandom(req, res, mode) {
     c = await getCacheNonBlocking(orientation);
   } catch (e) {
     const key = cacheKey(normalizeOrientation(orientation));
-    const stale = await cache.get(key);
-    if (stale && stale.items && stale.items.length > 0) c = stale;
+    let stale = null;
+    try {
+      stale = normalizeCachedData(await cache.get(key));
+    } catch {
+      stale = null;
+    }
+    if (stale && stale.items.length > 0) c = stale;
     else {
       const code = Number(e?.statusCode) || 502;
       return res.status(code).json({ status: 'error', time: Date.now(), message: String(e?.message || e) });
@@ -305,9 +325,13 @@ async function sendRandom(req, res, mode) {
   if (type === 'img') {
     try {
       const timeout = Number(config?.timeout_ms) || 10000;
+      const configuredMax = Number(config?.max_image_bytes);
+      const maxImageBytes = configuredMax > 0 ? configuredMax : DEFAULT_MAX_IMAGE_BYTES;
       const r = await http.axios.get(fullUrl, {
         responseType: 'stream',
         timeout,
+        maxContentLength: maxImageBytes,
+        maxBodyLength: maxImageBytes,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
           'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
@@ -320,16 +344,49 @@ async function sendRandom(req, res, mode) {
       }
 
       const status = Number(r.status) || 502;
+      const contentType = String(r.headers?.['content-type'] || '').trim();
+      const mimeType = contentType.split(';', 1)[0].toLowerCase();
+      const contentLength = Number(r.headers?.['content-length']);
+      if (status < 200 || status >= 300) {
+        r.data.destroy();
+        return res.status(502).json({ status: 'error', time: Date.now(), message: '图片上游响应异常' });
+      }
+      if (!mimeType.startsWith('image/') || mimeType === 'image/svg+xml') {
+        r.data.destroy();
+        return res.status(502).json({ status: 'error', time: Date.now(), message: '图片上游返回了非图片内容' });
+      }
+      if (Number.isFinite(contentLength) && contentLength > maxImageBytes) {
+        r.data.destroy();
+        return res.status(502).json({ status: 'error', time: Date.now(), message: '图片大小超过限制' });
+      }
+
       res.status(status);
-      if (r.headers && r.headers['content-type']) res.set('Content-Type', String(r.headers['content-type']));
-      if (r.headers && r.headers['content-length']) res.set('Content-Length', String(r.headers['content-length']));
+      res.set('Content-Type', contentType);
+      res.set('X-Content-Type-Options', 'nosniff');
+      if (Number.isFinite(contentLength) && contentLength >= 0) {
+        res.set('Content-Length', String(contentLength));
+      }
       if (r.headers && r.headers['etag']) res.set('ETag', String(r.headers['etag']));
 
+      let transferredBytes = 0;
+      r.data.on('data', chunk => {
+        transferredBytes += chunk.length;
+        if (transferredBytes > maxImageBytes) {
+          r.data.destroy(new Error('图片大小超过限制'));
+        }
+      });
       r.data.on('error', e => {
         logger.error(`流式传输错误: ${e?.message || e}`);
-        if (!res.headersSent) res.status(502).end(String(e?.message || e));
+        if (!res.headersSent) res.status(502).end('图片传输失败');
         else res.end();
       });
+      if (typeof res.once === 'function') {
+        res.once('close', () => {
+          if (!res.writableEnded && !r.data.destroyed) {
+            r.data.destroy();
+          }
+        });
+      }
 
       r.data.pipe(res);
       return;
@@ -357,8 +414,13 @@ async function sendList(req, res, mode) {
     c = await getCacheNonBlocking(orientation);
   } catch (e) {
     const key = cacheKey(normalizeOrientation(orientation));
-    const stale = await cache.get(key);
-    if (stale && stale.items && stale.items.length > 0) c = stale;
+    let stale = null;
+    try {
+      stale = normalizeCachedData(await cache.get(key));
+    } catch {
+      stale = null;
+    }
+    if (stale && stale.items.length > 0) c = stale;
     else {
       const code = Number(e?.statusCode) || 502;
       return res.status(code).json({ status: 'error', time: Date.now(), message: String(e?.message || e) });

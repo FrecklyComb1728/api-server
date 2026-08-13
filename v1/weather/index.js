@@ -1,11 +1,15 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+
+const { getStore } = require('../../libs/cacheStore');
 const HttpClient = require('../../utils/httpClient');
-const { queryIpInfoWithRetry, getClientIp } = require('../ipinfo');
 const logger = require('../../utils/logger');
+const { getClientIp, queryIpInfoWithRetry } = require('../ipinfo');
 
 const router = express.Router();
+const config = require(path.join(__dirname, 'config.json'));
+const WEEK_CACHE_PREFIX = 'weather:week:';
 
 const realtimeUpstreamState = new Map();
 let lastUsedRealtimeUpstreamIndex = -1;
@@ -50,37 +54,7 @@ function selectNextRealtimeUpstream(available) {
   return available[lastUsedRealtimeUpstreamIndex];
 }
 
-function readJsonFile(filePath) {
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw);
-}
-
-function findFirstExistingPath(candidates) {
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-const configPath = findFirstExistingPath([
-  path.join(__dirname, 'config.json')
-]);
-
-const config = configPath ? readJsonFile(configPath) : {};
-
-const cityIdPath = findFirstExistingPath([
-  path.join(__dirname, 'week', 'city_id.json')
-]);
-
-const cmoIdPath = findFirstExistingPath([
-  path.join(__dirname, 'week', 'cmo_id.json')
-]);
-
-const cityIdList = cityIdPath ? readJsonFile(cityIdPath) : [];
-const cmoIdList = cmoIdPath ? readJsonFile(cmoIdPath) : [];
-
-const cityIdMap = new Map(cityIdList.map(item => [String(item.name || ''), String(item.city_code || '')]));
-const cmoIdMap = new Map(cmoIdList.map(item => [String(item.name || ''), String(item.id || '')]));
+let weatherLookupsPromise = null;
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -97,9 +71,9 @@ function formatTime(d) {
 function formatWeekday(dateStr) {
   const parts = String(dateStr).split('/').map(v => Number(v));
   if (parts.length !== 3 || parts.some(n => Number.isNaN(n))) return '';
-  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
   const map = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-  return map[d.getDay()] || '';
+  return map[d.getUTCDay()] || '';
 }
 
 function digitsOnly(value) {
@@ -112,7 +86,37 @@ function normalizeCityForMatch(value) {
   return String(value ?? '').trim().replace(/[\s,，]/g, '').replace(/[省市]/g, '');
 }
 
-function findIdByTailMatch(name, lookupMap) {
+function createCityLookup(items, valueField) {
+  const exact = new Map();
+  let maxNameLength = 0;
+  items.forEach(item => {
+    const name = String(item?.name || '').trim();
+    const value = String(item?.[valueField] || '').trim();
+    if (!name || !value) return;
+    const variants = new Set([name, normalizeCityForMatch(name)]);
+    variants.forEach(variant => {
+      if (!variant) return;
+      if (!exact.has(variant)) exact.set(variant, value);
+      maxNameLength = Math.max(maxNameLength, variant.length);
+    });
+  });
+  return { exact, maxNameLength };
+}
+
+async function loadWeatherLookups() {
+  if (!weatherLookupsPromise) {
+    weatherLookupsPromise = Promise.all([
+      fs.promises.readFile(path.join(__dirname, 'week', 'city_id.json'), 'utf-8'),
+      fs.promises.readFile(path.join(__dirname, 'week', 'cmo_id.json'), 'utf-8')
+    ]).then(([cityIdRaw, cmoIdRaw]) => ({
+      city: createCityLookup(JSON.parse(cityIdRaw), 'city_code'),
+      cmo: createCityLookup(JSON.parse(cmoIdRaw), 'id')
+    }));
+  }
+  return weatherLookupsPromise;
+}
+
+function findIdByTailMatch(name, lookup) {
   const raw = String(name ?? '').trim();
   if (!raw) return '';
 
@@ -122,20 +126,22 @@ function findIdByTailMatch(name, lookupMap) {
   const bases = [base1, base2, base3].filter(Boolean);
 
   for (const base of bases) {
-    if (lookupMap.has(base)) return lookupMap.get(base);
+    if (lookup.exact.has(base)) return lookup.exact.get(base);
   }
 
   for (const base of bases) {
     const maxLen = Math.min(4, base.length);
     for (let len = 2; len <= maxLen; len++) {
       const cand = base.slice(-len);
-      if (lookupMap.has(cand)) return lookupMap.get(cand);
+      if (lookup.exact.has(cand)) return lookup.exact.get(cand);
     }
   }
 
   for (const base of bases) {
-    for (const [k, v] of lookupMap.entries()) {
-      if (k && base.endsWith(k)) return v;
+    const maxLength = Math.min(base.length, lookup.maxNameLength);
+    for (let length = maxLength; length >= 1; length--) {
+      const candidate = base.slice(-length);
+      if (lookup.exact.has(candidate)) return lookup.exact.get(candidate);
     }
   }
 
@@ -151,14 +157,28 @@ function applyTemplate(url, values) {
 }
 
 let lastVmyRequestAt = 0;
-// cluster 模式下各 Worker 独立计时，多 Worker 实际节流间隔为 1000ms / N
+let vmyQueue = Promise.resolve();
+let vmyQueueSize = 0;
 async function throttleVmy() {
-  const now = Date.now();
-  const wait = Math.max(0, 1000 - (now - lastVmyRequestAt));
-  if (wait > 0) {
-    await new Promise(resolve => setTimeout(resolve, wait));
+  const configuredLimit = Number(config?.vmy_queue_limit);
+  const queueLimit = configuredLimit > 0 ? configuredLimit : 100;
+  if (vmyQueueSize >= queueLimit) {
+    throw new Error('52vmy 请求队列已满');
   }
-  lastVmyRequestAt = Date.now();
+  vmyQueueSize++;
+  const scheduled = vmyQueue.then(async () => {
+    const wait = Math.max(0, 1000 - (Date.now() - lastVmyRequestAt));
+    if (wait > 0) {
+      await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    lastVmyRequestAt = Date.now();
+  });
+  vmyQueue = scheduled.catch(() => {});
+  try {
+    await scheduled;
+  } finally {
+    vmyQueueSize--;
+  }
 }
 
 async function resolveCityFromIp(ip) {
@@ -195,9 +215,44 @@ function normalizeVisibility(value) {
   return `${d}km`;
 }
 
+function normalizeTemperature(value) {
+  const match = String(value ?? '').match(/-?\d+(?:\.\d+)?/);
+  return match ? match[0] : '';
+}
+
+function normalizeWeek(value) {
+  if (!Array.isArray(value)) return null;
+  const week = value.slice(0, 7).reduce((result, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return result;
+    const date = String(item.date || '').trim();
+    if (!date) return result;
+    result.push({
+      date,
+      wind: String(item.wind || '').trim(),
+      windSpeed: String(item.windSpeed || '').trim(),
+      weather: String(item.weather || '').trim(),
+      temperature: String(item.temperature || '').trim(),
+      week: String(item.week || '').trim()
+    });
+    return result;
+  }, []);
+  return week.length > 0 ? week : null;
+}
+
+function getWeatherCredential(name) {
+  const value = process.env[name];
+  return value ? String(value).trim() : '';
+}
+
 async function fetchBingMsnRealtime(http, cityQuery) {
   if (!config?.bing?.enabled || !config?.msn?.enabled) return null;
-  const bingUrl = applyTemplate(config.bing.url, { city: encodeURIComponent(cityQuery) });
+  const appId = getWeatherCredential('BING_APP_ID');
+  const apiKey = getWeatherCredential('MSN_API_KEY');
+  if (!appId || !apiKey) return null;
+  const bingUrl = applyTemplate(config.bing.url, {
+    appid: encodeURIComponent(appId),
+    city: encodeURIComponent(cityQuery)
+  });
   const bingData = await http.get(bingUrl);
   const first = Array.isArray(bingData?.value) ? bingData.value[0] : null;
   const lat = first?.geo?.latitude;
@@ -205,6 +260,7 @@ async function fetchBingMsnRealtime(http, cityQuery) {
   if (lat === undefined || lon === undefined) return null;
 
   const msnUrl = applyTemplate(config.msn.url, {
+    apikey: encodeURIComponent(apiKey),
     'value.geo.latitude,value.geo.longitude': `${lat},${lon}`
   });
 
@@ -213,7 +269,7 @@ async function fetchBingMsnRealtime(http, cityQuery) {
   const locationName = msnData?.responses?.[0]?.weather?.[0]?.source?.location?.Name;
   if (!current) return null;
 
-  const temp = digitsOnly(current.temp);
+  const temp = normalizeTemperature(current.temp);
   const weather = String(current.pvdrCap || current.cap || '').trim();
   const wind = String(current.pvdrWindDir || '').trim();
   const windSpeed = String(current.pvdrWindSpd || '').trim();
@@ -224,8 +280,8 @@ async function fetchBingMsnRealtime(http, cityQuery) {
     provider: 'msn',
     city: String(locationName || '').trim(),
     temperature: temp,
-    high: temp,
-    low: temp,
+    high: '',
+    low: '',
     weather,
     wind,
     windSpeed,
@@ -236,12 +292,17 @@ async function fetchBingMsnRealtime(http, cityQuery) {
 
 async function fetchAmapRealtime(http, cityQuery) {
   if (!config?.amap?.enabled) return null;
-  const url = applyTemplate(config.amap.url, { city: encodeURIComponent(cityQuery) });
+  const key = getWeatherCredential('AMAP_API_KEY');
+  if (!key) return null;
+  const url = applyTemplate(config.amap.url, {
+    key: encodeURIComponent(key),
+    city: encodeURIComponent(cityQuery)
+  });
   const data = await http.get(url);
   const live = Array.isArray(data?.lives) ? data.lives[0] : null;
   if (!live) return null;
 
-  const temp = digitsOnly(live.temperature);
+  const temp = normalizeTemperature(live.temperature);
   const weather = String(live.weather || '').trim();
   const wind = String(live.winddirection || '').trim();
   const windSpeed = String(live.windpower || '').trim();
@@ -251,8 +312,8 @@ async function fetchAmapRealtime(http, cityQuery) {
     provider: 'amap',
     city: String(live.city || '').trim(),
     temperature: temp,
-    high: temp,
-    low: temp,
+    high: '',
+    low: '',
     weather,
     wind: wind ? `${wind}风` : '',
     windSpeed,
@@ -264,7 +325,7 @@ async function fetchAmapRealtime(http, cityQuery) {
 function extractVmyData(data) {
   const current = data?.data?.current || data?.current || data?.data || null;
   const city = data?.data?.city || data?.city || current?.city || '';
-  const temperature = digitsOnly(current?.temp ?? current?.wendu ?? current?.temperature ?? data?.data?.wendu);
+  const temperature = normalizeTemperature(current?.temp ?? current?.wendu ?? current?.temperature ?? data?.data?.wendu);
   const weather = String(current?.weather || current?.cap || current?.type || '').trim();
   const wind = String(current?.wind || current?.windDirection || '').trim();
   const windSpeed = String(current?.windSpeed || current?.windpower || '').trim();
@@ -277,8 +338,8 @@ function extractVmyData(data) {
     provider: 'vmy',
     city: String(city || '').trim(),
     temperature,
-    high: temperature,
-    low: temperature,
+    high: '',
+    low: '',
     weather,
     wind,
     windSpeed,
@@ -303,7 +364,7 @@ async function fetchSuyanRealtime(http, cityQuery) {
   const base = data?.data || data;
 
   const city = base?.city || '';
-  const temperature = digitsOnly(current?.temp ?? base?.temp);
+  const temperature = normalizeTemperature(current?.temp ?? base?.temp);
   const weather = String(current?.weather || base?.weather || '').trim();
   const wind = String(current?.wind || base?.wind || '').trim();
   const windSpeed = String(current?.windSpeed || base?.windSpeed || '').trim();
@@ -316,8 +377,8 @@ async function fetchSuyanRealtime(http, cityQuery) {
     provider: 'suyan',
     city: String(city || '').trim(),
     temperature,
-    high: temperature,
-    low: temperature,
+    high: '',
+    low: '',
     weather,
     wind,
     windSpeed,
@@ -327,9 +388,16 @@ async function fetchSuyanRealtime(http, cityQuery) {
 }
 
 async function queryRealtimeWithRetry(http, cityQuery) {
+  const bingMsnEnabled = Boolean(
+    config?.bing?.enabled
+    && config?.msn?.enabled
+    && getWeatherCredential('BING_APP_ID')
+    && getWeatherCredential('MSN_API_KEY')
+  );
+  const amapEnabled = Boolean(config?.amap?.enabled && getWeatherCredential('AMAP_API_KEY'));
   const upstreams = [
-    { name: 'bing_msn', enabled: Boolean(config?.bing?.enabled && config?.msn?.enabled), fn: () => fetchBingMsnRealtime(http, cityQuery) },
-    { name: 'amap', enabled: Boolean(config?.amap?.enabled), fn: () => fetchAmapRealtime(http, cityQuery) },
+    { name: 'bing_msn', enabled: bingMsnEnabled, fn: () => fetchBingMsnRealtime(http, cityQuery) },
+    { name: 'amap', enabled: amapEnabled, fn: () => fetchAmapRealtime(http, cityQuery) },
     { name: 'vmy', enabled: Boolean(config?.vmy?.enabled), fn: () => fetchVmyRealtime(http, cityQuery) },
     { name: 'suyan', enabled: Boolean(config?.suyan?.enabled), fn: () => fetchSuyanRealtime(http, cityQuery) }
   ];
@@ -435,9 +503,11 @@ async function fetchCmaWeek(http, stationId) {
     const nightText = String(item.nightText || '').trim();
     const weather = dayText && nightText && dayText !== nightText ? `${dayText}转${nightText}` : (dayText || nightText);
 
-    const high = item.high;
-    const low = item.low;
-    const avg = (typeof high === 'number' && typeof low === 'number') ? Math.round((high + low) / 2) : null;
+    const highValue = normalizeTemperature(item.high);
+    const lowValue = normalizeTemperature(item.low);
+    const high = highValue ? Number(highValue) : Number.NaN;
+    const low = lowValue ? Number(lowValue) : Number.NaN;
+    const avg = Number.isFinite(high) && Number.isFinite(low) ? Math.round((high + low) / 2) : null;
     const temperature = avg !== null ? `${avg}℃` : '';
 
     return {
@@ -462,8 +532,10 @@ async function fetchSojsonWeek(http, cityId) {
 
   return forecast.slice(0, 7).map(item => {
     const date = String(item.ymd || '').trim().replaceAll('-', '/');
-    const high = Number(digitsOnly(item.high));
-    const low = Number(digitsOnly(item.low));
+    const highValue = normalizeTemperature(item.high);
+    const lowValue = normalizeTemperature(item.low);
+    const high = highValue ? Number(highValue) : Number.NaN;
+    const low = lowValue ? Number(lowValue) : Number.NaN;
     const temperature = Number.isFinite(high) && Number.isFinite(low) ? `${Math.round((high + low) / 2)}℃` : '';
 
     return {
@@ -480,9 +552,20 @@ async function fetchSojsonWeek(http, cityId) {
 async function buildWeek(cityQuery) {
   const http = new HttpClient({ timeout: 10000 });
   const city = pickCityDisplay(cityQuery);
+  const cacheKey = `${WEEK_CACHE_PREFIX}${encodeURIComponent(normalizeCityForMatch(cityQuery))}`;
+  let cache = null;
+  try {
+    cache = getStore();
+    const cached = normalizeWeek(await cache.get(cacheKey));
+    if (cached) return cached;
+  } catch {
+    cache = null;
+  }
 
-  const stationId = findIdByTailMatch(cityQuery, cmoIdMap) || findIdByTailMatch(city, cmoIdMap);
-  const sojsonCityId = findIdByTailMatch(cityQuery, cityIdMap) || findIdByTailMatch(city, cityIdMap);
+  const lookups = await loadWeatherLookups();
+
+  const stationId = findIdByTailMatch(cityQuery, lookups.cmo) || findIdByTailMatch(city, lookups.cmo);
+  const sojsonCityId = findIdByTailMatch(cityQuery, lookups.city) || findIdByTailMatch(city, lookups.city);
 
   logger.debug(`城市ID匹配: ${cityQuery}`, { stationId, sojsonCityId });
 
@@ -492,8 +575,18 @@ async function buildWeek(cityQuery) {
 
   for (const fn of providers) {
     try {
-      const week = await fn();
-      if (Array.isArray(week) && week.length > 0) return week;
+      const week = normalizeWeek(await fn());
+      if (week) {
+        if (cache) {
+          const configuredTtl = Number(config?.week_cache_ttl);
+          try {
+            await cache.set(cacheKey, week, configuredTtl > 0 ? configuredTtl : 3600);
+          } catch (error) {
+            logger.warn('天气缓存写入失败', { error: error.message });
+          }
+        }
+        return week;
+      }
     } catch {
     }
   }

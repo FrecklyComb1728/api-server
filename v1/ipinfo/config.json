@@ -18,11 +18,30 @@
     "city",
     "district",
     "country",
+    "country_code",
     "isp",
     "lon",
     "lat"
   ],
   "upstream_apis": [
+    {
+      "name": "cdngod",
+      "url": "https://ip.cdngod.com/v1/ip/{ip}",
+      "max_requests": 120,
+      "time_window": 60,
+      "enabled": true,
+      "ip_versions": "IPv6,IPv4",
+      "field_mapping": {
+        "ip": "ip",
+        "prov": "province",
+        "city": "city",
+        "country": "country",
+        "country_code": "country_code",
+        "isp": "isp",
+        "lon": "longitude",
+        "lat": "latitude"
+      }
+    },
     {
       "name": "bt.cn",
       "url": "https://www.bt.cn/api/panel/get_ip_info?ip={ip}",
@@ -35,6 +54,7 @@
         "prov": "{ip}.province",
         "city": "{ip}.city",
         "country": "{ip}.country",
+        "country_code": "en_short_code",
         "isp": "{ip}.carrier",
         "lon": "{ip}.longitude",
         "lat": "{ip}.latitude"
@@ -52,6 +72,7 @@
         "prov": "data.prov",
         "city": "data.city",
         "country": "data.country",
+        "country_code": "country_code",
         "isp": "data.isp",
         "lon": "data.lng",
         "lat": "data.lat"
@@ -69,6 +90,7 @@
         "prov": "data.province",
         "city": "data.city",
         "district": "data.district",
+        "country_code": "data.countryCode",
         "country": "data.country",
         "isp": "data.isp",
         "lon": "data.longitude",
@@ -88,6 +110,7 @@
         "city": "data.city",
         "district": "data.district",
         "country": "data.country",
+        "country_code": "data.countryCode",
         "isp": "data.isp",
         "lon": "data.longitude",
         "lat": "data.latitude"

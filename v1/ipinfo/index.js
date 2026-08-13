@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
+const crypto = require('crypto');
 const net = require('net');
 const path = require('path');
 const logger = require('../../utils/logger');
@@ -12,6 +12,9 @@ const config = require(configPath);
 
 const cache = getStore();
 const CACHE_PREFIX = 'ipinfo:';
+const LOCK_PREFIX = 'ipinfo:lock:';
+const LOCK_TTL = 15;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 const IP_VERSION_VALUES = new Map([
   ['ipv4', 4],
   ['ipv6', 6]
@@ -20,8 +23,16 @@ let lastUsedApiIndex = -1;
 const apiRequestCounters = Object.create(null);
 const apiIpVersions = new Map();
 const apiNames = new Set();
+const inflightQueries = new Map();
 if (!Array.isArray(config.upstream_apis)) {
   throw new Error('upstream_apis 必须是数组');
+}
+if (!Array.isArray(config.response_fields)) {
+  throw new Error('response_fields 必须是数组');
+}
+const cacheTtl = Number(config.cache_ttl);
+if (!Number.isFinite(cacheTtl) || cacheTtl < 0) {
+  throw new Error('cache_ttl 必须是非负数');
 }
 config.upstream_apis.forEach(api => {
   if (!api || typeof api.name !== 'string' || !api.name.trim()) {
@@ -31,9 +42,10 @@ config.upstream_apis.forEach(api => {
   if (apiNames.has(apiName)) {
     throw new Error(`upstream API 名称重复: ${apiName}`);
   }
+  api.name = apiName;
   apiNames.add(apiName);
-  apiIpVersions.set(api.name, parseIpVersions(api));
-  apiRequestCounters[api.name] = {
+  apiIpVersions.set(apiName, parseIpVersions(api));
+  apiRequestCounters[apiName] = {
     count: 0,
     windowStartTime: Date.now(),
     isAvailable: api.enabled
@@ -185,35 +197,87 @@ function mapResponseToStandardFormat(data, fieldMapping, variables) {
   return result;
 }
 
+function expandIpv6ToPrefix(ip, groupCount) {
+  let groups;
+  const doubleColon = ip.indexOf('::');
+  if (doubleColon === -1) {
+    groups = ip.split(':');
+  } else {
+    const head = ip.slice(0, doubleColon).split(':').filter(Boolean);
+    const tail = ip.slice(doubleColon + 2).split(':').filter(Boolean);
+    const missingGroups = 8 - head.length - tail.length;
+    if (missingGroups < 0) {
+      throw new Error('IPv6 地址分组数量无效');
+    }
+    groups = head.concat(new Array(missingGroups).fill('0'), tail);
+  }
+  return groups.map(group => group.padStart(4, '0')).slice(0, groupCount).join(':');
+}
+
+function getIpv6PrefixKey(ip) {
+  const address = ip.split('%', 1)[0];
+  try {
+    const canonical = new URL(`http://[${address}]`).hostname.slice(1, -1).toLowerCase();
+    return `${expandIpv6ToPrefix(canonical, 3)}/48`;
+  } catch {
+    logger.warn(`IPv6缓存键规范化失败，使用原始地址作为缓存键`, { ip });
+    return ip;
+  }
+}
+
 function getCacheKey(ip) {
   const ipStr = String(ip || '').trim();
   const match = ipStr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!match) return ipStr;
-  const parts = match.slice(1).map(Number);
-  if (parts.some(n => Number.isNaN(n) || n < 0 || n > 255)) return ipStr;
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+  if (match) {
+    const parts = match.slice(1).map(Number);
+    if (parts.every(n => !Number.isNaN(n) && n >= 0 && n <= 255)) {
+      return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+  }
+  if (net.isIP(ipStr) === 6) {
+    return getIpv6PrefixKey(ipStr);
+  }
+  return ipStr;
 }
 
 async function getFromCache(ip) {
   const key = CACHE_PREFIX + getCacheKey(ip);
   const cached = await cache.get(key);
-  if (!cached) return null;
-  if (cached && cached.data) {
-    return {
-      ...cached,
-      data: {
-        ...cached.data,
-        ip
+  if (
+    !cached
+    || typeof cached !== 'object'
+    || Array.isArray(cached)
+    || !Object.prototype.hasOwnProperty.call(cached, 'source')
+    || typeof cached.source !== 'string'
+    || !cached.source.trim()
+    || !Object.prototype.hasOwnProperty.call(cached, 'data')
+    || !cached.data
+    || typeof cached.data !== 'object'
+    || Array.isArray(cached.data)
+  ) return null;
+  const data = {};
+  config.response_fields.forEach(field => {
+    if (
+      field !== '__proto__'
+      && field !== 'constructor'
+      && field !== 'prototype'
+      && Object.prototype.hasOwnProperty.call(cached.data, field)
+    ) {
+      const value = cached.data[field];
+      if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) {
+        data[field] = value;
       }
-    };
+    }
+  });
+  if (config.response_fields.includes('ip')) {
+    data.ip = ip;
   }
-  return cached;
+  return { source: cached.source.trim(), data };
 }
 
 async function saveToCache(ip, data) {
   const key = CACHE_PREFIX + getCacheKey(ip);
-  const ttl = Number(config.cache_ttl);
-  await cache.set(key, data, ttl > 0 ? ttl : 0);
+  await cache.set(key, data, cacheTtl);
 }
 
 async function safeQueryIpInfo(ip, apiConfig) {
@@ -223,7 +287,15 @@ async function safeQueryIpInfo(ip, apiConfig) {
   incrementApiCounter(apiConfig.name);
   try {
     const url = apiConfig.url.replaceAll('{ip}', encodeURIComponent(ip));
-    const response = await axios.get(url, { timeout: config.default_timeout });
+    const response = await axios.get(url, {
+      timeout: config.default_timeout,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'api-server/1.0'
+      },
+      maxContentLength: MAX_RESPONSE_BYTES,
+      maxBodyLength: MAX_RESPONSE_BYTES
+    });
     const standardData = mapResponseToStandardFormat(response.data, apiConfig.field_mapping, { ip });
     const filteredData = {};
     config.response_fields.forEach(field => {
@@ -233,8 +305,7 @@ async function safeQueryIpInfo(ip, apiConfig) {
     });
     return {
       source: apiConfig.name,
-      data: filteredData,
-      raw_data: response.data
+      data: filteredData
     };
   } catch (error) {
     const err = new Error(`查询失败: ${error.message}`);
@@ -257,7 +328,8 @@ function isIpv4MappedIpv6(ip) {
 }
 
 function parseIp(ip) {
-  const normalizedIp = String(ip || '').trim();
+  const input = String(ip || '').trim();
+  const normalizedIp = input.includes(':') ? input.split('%', 1)[0] : input;
   const ipVersion = net.isIP(normalizedIp);
   if (ipVersion === 0) {
     const error = new Error('无效的IP地址');
@@ -272,13 +344,7 @@ function parseIp(ip) {
   return { normalizedIp, ipVersion };
 }
 
-async function queryIpInfoWithRetry(ip) {
-  const { normalizedIp, ipVersion } = parseIp(ip);
-  const cachedData = await getFromCache(normalizedIp);
-  if (cachedData) {
-    logger.debug(`IP缓存命中`, { ip: normalizedIp });
-    return cachedData;
-  }
+async function queryProviders(normalizedIp, ipVersion) {
   let availableApis = getAvailableApis(ipVersion);
   if (availableApis.length === 0) {
     const err = new Error(`没有支持 IPv${ipVersion} 的可用API`);
@@ -289,7 +355,7 @@ async function queryIpInfoWithRetry(ip) {
   let result;
   let lastError;
   let retryRound = 0;
-  let triedApis = new Set();
+  const triedApis = new Set();
   while (retryRound <= config.retry_count) {
     availableApis = getAvailableApis(ipVersion).filter(api => !triedApis.has(api.name));
     if (availableApis.length === 0) {
@@ -311,8 +377,12 @@ async function queryIpInfoWithRetry(ip) {
     }
     try {
       result = await safeQueryIpInfo(normalizedIp, selectedApi);
-      logger.debug(`IP查询成功`, { source: result.source, ip: normalizedIp });
-      await saveToCache(normalizedIp, result);
+      logger.debug(`IP查询成功`, { source: result.source });
+      try {
+        await saveToCache(normalizedIp, result);
+      } catch (error) {
+        logger.warn('IP缓存写入失败', { error: error.message });
+      }
       return result;
     } catch (error) {
       logger.warn(`IP查询上游失败`, { source: selectedApi.name, error: error.message, attempt: retryRound + 1 });
@@ -330,31 +400,75 @@ async function queryIpInfoWithRetry(ip) {
   }
 }
 
-function getClientIp(req) {
-  let ipHeaders = [];
-  if (Array.isArray(config.ip_headers)) {
-    if (config.ip_headers.length > 0 && typeof config.ip_headers[0] === 'object') {
-      ipHeaders = [...config.ip_headers].sort((a, b) => a.priority - b.priority);
-    } else {
-      ipHeaders = config.ip_headers.map(header => ({ name: header }));
-    }
-  } else {
-    ipHeaders = [
-      { name: 'x-forwarded-for', priority: 1 },
-      { name: 'x-real-ip', priority: 2 }
-    ];
+async function waitForCachedResult(ip) {
+  const deadline = Date.now() + LOCK_TTL * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const cachedData = await getFromCache(ip);
+    if (cachedData) return cachedData;
   }
-  for (const header of ipHeaders) {
-    const headerValue = req.get(header.name);
-    if (headerValue) {
-      const ips = headerValue.split(',').map(ip => ip.trim()).filter(ip => ip);
-      if (ips.length > 0) {
-        return ips[0];
+  return null;
+}
+
+async function queryIpInfoWithRetry(ip) {
+  const { normalizedIp, ipVersion } = parseIp(ip);
+  const cachedData = await getFromCache(normalizedIp);
+  if (cachedData) {
+    logger.debug('IP缓存命中');
+    return cachedData;
+  }
+
+  const key = getCacheKey(normalizedIp);
+  if (inflightQueries.has(key)) {
+    const result = await inflightQueries.get(key);
+    const cached = await getFromCache(normalizedIp);
+    if (cached) return cached;
+    return {
+      source: result.source,
+      data: {
+        ...result.data,
+        ...(config.response_fields.includes('ip') ? { ip: normalizedIp } : {})
+      }
+    };
+  }
+
+  const query = (async () => {
+    const lockKey = LOCK_PREFIX + key;
+    const lockToken = crypto.randomUUID();
+    let locked = await cache.setNX(lockKey, lockToken, LOCK_TTL);
+    try {
+      if (!locked) {
+        const waitedResult = await waitForCachedResult(normalizedIp);
+        if (waitedResult) return waitedResult;
+        locked = await cache.setNX(lockKey, lockToken, LOCK_TTL);
+        if (!locked) {
+          const error = new Error('相同网段查询正在处理中');
+          error.source = '系统';
+          error.statusCode = 503;
+          throw error;
+        }
+      }
+      return await queryProviders(normalizedIp, ipVersion);
+    } finally {
+      if (locked) {
+        try {
+          await cache.delIfValue(lockKey, lockToken);
+        } catch (error) {
+          logger.warn('IP查询锁释放失败', { error: error.message });
+        }
       }
     }
+  })();
+  inflightQueries.set(key, query);
+  try {
+    return await query;
+  } finally {
+    inflightQueries.delete(key);
   }
-  const remoteIp = req.connection.remoteAddress || req.socket.remoteAddress || '';
-  return remoteIp;
+}
+
+function getClientIp(req) {
+  return req.ip || '';
 }
 
 async function handleIpQuery(ip, res) {
@@ -362,7 +476,9 @@ async function handleIpQuery(ip, res) {
     const result = await queryIpInfoWithRetry(ip);
     res.json(result);
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    const body = { error: error.message };
+    if (error.source) body.source = error.source;
+    res.status(error.statusCode || 500).json(body);
   }
 }
 
