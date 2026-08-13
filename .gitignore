@@ -4,3 +4,9 @@ logs/
 server-config.json
 webhook.json
 ecosystem.config.js
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12

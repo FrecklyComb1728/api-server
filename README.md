@@ -5,8 +5,8 @@
 ## 快速开始
 
 ```bash
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 访问 `http://localhost:8633/`

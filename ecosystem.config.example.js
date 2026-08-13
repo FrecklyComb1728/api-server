@@ -9,6 +9,12 @@ module.exports = {
     listen_timeout: 10000,
     kill_timeout: 5000,
     autorestart: true,
-    env: { NODE_ENV: 'production', REDIS_PASSWORD: '' }
+    env: {
+      NODE_ENV: 'production',
+      REDIS_PASSWORD: '',
+      BING_APP_ID: '',
+      MSN_API_KEY: '',
+      AMAP_API_KEY: ''
+    }
   }]
 };

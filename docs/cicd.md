@@ -34,14 +34,18 @@ cd /opt
 git clone https://github.com/FrecklyComb1728/api-server.git
 cd api-server
 
+# 创建运行用户并授权项目目录
+sudo useradd --system --create-home --shell /bin/bash api-server
+sudo chown -R api-server:api-server /opt/api-server
+
 # 从示例文件创建实际配置
 cp server-config.example.json server-config.json && cp ecosystem.config.example.js ecosystem.config.js
 # 编辑 server-config.json 和 ecosystem.config.js 调整配置
 
-npm ci --registry=https://registry.npmmirror.com
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup  # 配置开机自启
+sudo -u api-server npm ci --registry=https://registry.npmmirror.com
+sudo -u api-server pm2 start ecosystem.config.js
+sudo -u api-server pm2 save
+pm2 startup -u api-server --hp /home/api-server
 ```
 
 ### 3. 部署脚本
@@ -50,7 +54,7 @@ pm2 startup  # 配置开机自启
 
 - 加锁防并发部署
 - `git fetch` → `git reset --hard` 拉取最新代码
-- 仅在 `package.json` 变动时重新 `npm ci`
+- 在 `package.json` 或 `package-lock.json` 变动时重新 `npm ci`
 - `pm2 reload` 零停机重启
 
 设置权限：
@@ -83,8 +87,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=api-server
+Group=api-server
 WorkingDirectory=/opt/api-server
 ExecStart=/usr/local/bin/webhook \
   -hooks /opt/api-server/webhook.json \
@@ -92,6 +96,8 @@ ExecStart=/usr/local/bin/webhook \
 Restart=always
 NoNewPrivileges=yes
 PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/api-server
 
 [Install]
 WantedBy=multi-user.target
@@ -128,7 +134,7 @@ sudo ufw allow from 140.82.112.0/20 to any port 9000 proto tcp
 
 | 字段 | 值 |
 |------|-----|
-| Payload URL | `http://服务器IP:9000/hooks/deploy` |
+| Payload URL | `http://服务器IP:9000/hooks/api-server` |
 | Content type | `application/json` |
 | Secret | 与 `webhook.json` 一致 |
 | Events | Just the `push` event |
@@ -145,6 +151,21 @@ pm2 status
 # 部署日志
 tail -f /opt/api-server/logs/deploy.log
 ```
+
+### 9. 本机反向代理
+
+服务默认只监听 `127.0.0.1:8633`。在同一台主机配置 nginx，并覆盖外部请求携带的转发头：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8633;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+不要把 Node.js 的 8633 端口直接暴露到公网。
 
 ---
 

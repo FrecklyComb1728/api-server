@@ -128,5 +128,5 @@ const rateLimiter = getRateLimitStore();
 ## 注意事项
 
 - 新增或删除插件需要重启进程
-- 使用 `pnpm dev` 时文件变化会自动重启
+- 使用 `npm run dev` 时文件变化会自动重启
 - 元数据中的 `path` 不需要包含模块前缀，系统会自动拼接 `/v1/{模块名}`

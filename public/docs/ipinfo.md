@@ -19,16 +19,16 @@ curl http://api.mfawa.top/v1/ipinfo?ip=114.114.114.114
 
 ```json
 {
-  "source": "bt.cn",
+  "source": "cdngod",
   "data": {
     "ip": "114.114.114.114",
-    "country": "中国",
     "prov": "江苏",
     "city": "南京",
-    "district": "",
-    "isp": "114DNS",
-    "lon": "118.767413",
-    "lat": "32.041544"
+    "country": "中国",
+    "country_code": "CN",
+    "isp": "Zenlayer",
+    "lon": 118.767413,
+    "lat": 32.041544
   }
 }
 ```
@@ -37,13 +37,13 @@ curl http://api.mfawa.top/v1/ipinfo?ip=114.114.114.114
 |------|------|------|
 | `source` | string | 数据来源 API |
 | `data.ip` | string | 查询的 IP |
-| `data.country` | string | 国家 |
 | `data.prov` | string | 省份 |
 | `data.city` | string | 城市 |
-| `data.district` | string | 区县 |
+| `data.country` | string | 国家 |
+| `data.country_code` | string | 国家代码 |
 | `data.isp` | string | ISP 运营商 |
-| `data.lon` | string | 经度 |
-| `data.lat` | string | 纬度 |
+| `data.lon` | number/string | 经度 |
+| `data.lat` | number/string | 纬度 |
 
 字段为空字符串表示该上游未返回此信息。
 
@@ -51,7 +51,8 @@ curl http://api.mfawa.top/v1/ipinfo?ip=114.114.114.114
 
 | 状态码 | 场景 |
 |--------|------|
-| `500` | 所有上游均不可用或查询失败 |
+| `500` | 上游查询失败 |
+| `503` | 没有匹配的可用上游或相同网段查询正在处理 |
 | `429` | 触发限流 |
 
 ```json

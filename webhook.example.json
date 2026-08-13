@@ -1,6 +1,6 @@
 [{
   "id": "api-server",
-  "command-working-directory": "/opt/mifeng-api",
+  "command-working-directory": "/opt/api-server",
   "response-message": "deploying",
   "execute-command": "/bin/bash",
   "pass-arguments-to-command": [

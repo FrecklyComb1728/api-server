@@ -35,8 +35,8 @@ curl http://api.mfawa.top/v1/weather
   "city": "北京",
   "realtime": {
     "city": "北京",
-    "high": "3",
-    "low": "3",
+    "high": "",
+    "low": "",
     "temperature": "3",
     "weather": "阴",
     "wind": "西北风",
@@ -63,8 +63,8 @@ curl http://api.mfawa.top/v1/weather
 
 | 字段 | 说明 |
 |------|------|
-| `high` | 最高温度 |
-| `low` | 最低温度 |
+| `high` | 最高温度，上游未提供时为空字符串 |
+| `low` | 最低温度，上游未提供时为空字符串 |
 | `temperature` | 当前温度 |
 | `weather` | 天气状况 |
 | `wind` | 风向 |

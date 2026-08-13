@@ -5,8 +5,8 @@
 ## 快速开始
 
 ```bash
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 访问 `http://localhost:8633/`
@@ -27,7 +27,7 @@ api-server/
     corsHandler.js     # CORS 跨域中间件
     errorHandler.js    # 错误页面渲染与兜底中间件
     httpClient.js      # axios 封装，统一错误分类
-    logger.js          # 访问日志（文件写入 + 时区偏移）
+    logger.js          # 访问日志（异步批量文件写入）
     markdownRenderer.js  # markdown → HTML 渲染（marked）
     mimeTypes.js       # 静态文件 MIME 类型映射
     rateLimiter.js     # 基于 IP 的滑动窗口限流（支持 Redis 集群共享）

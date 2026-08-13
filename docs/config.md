@@ -7,7 +7,9 @@
 ```json
 {
   "projectName": "API Server",
+  "host": "127.0.0.1",
   "port": 8633,
+  "trustProxy": "loopback",
   "staticDir": "public",
   "apiDir": "v1",
   "index": {
@@ -20,16 +22,14 @@
     "templatePath": "template/markdown.html"
   },
   "log": {
-    "enableFile": true,
-    "logPath": "logs/access.log",
-    "timezone": 8,
-    "ipHeader": "X-Forwarded-For"
+    "level": "info",
+    "file": true,
+    "dir": "logs"
   },
   "rateLimit": {
     "enabled": true,
     "timeWindow": 60,
-    "maxRequests": 100,
-    "ipHeader": "X-Forwarded-For"
+    "maxRequests": 100
   },
   "cluster": {
     "enabled": true,
@@ -53,7 +53,9 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `projectName` | string | 站点标题与模板变量 |
+| `host` | string | 监听地址，默认 `127.0.0.1` |
 | `port` | number | 监听端口，默认 `8633` |
+| `trustProxy` | string/boolean/array | Express 可信代理配置，默认 `loopback` |
 | `staticDir` | string | 静态资源根目录，默认 `public` |
 | `apiDir` | string | API 模块根目录，默认 `v1` |
 
@@ -69,10 +71,9 @@
 
 | 字段 | 说明 |
 |------|------|
-| `log.enableFile` | 是否写入日志文件 |
-| `log.logPath` | 日志文件路径，如 `logs/access.log` |
-| `log.timezone` | 时区偏移量，如 `8` = UTC+8 |
-| `log.ipHeader` | 记录的客户端 IP 来源头，如 `X-Forwarded-For` |
+| `log.level` | 日志级别：`error`、`warn`、`info`、`debug` |
+| `log.file` | 是否写入日志文件 |
+| `log.dir` | 按月份存放日志的目录，默认 `logs` |
 
 ### 限流
 
@@ -81,7 +82,23 @@
 | `rateLimit.enabled` | 是否启用限流 |
 | `rateLimit.timeWindow` | 统计窗口（秒） |
 | `rateLimit.maxRequests` | 窗口内最大请求数，`0` = 不限流 |
-| `rateLimit.ipHeader` | 客户端 IP 的 HTTP 头 |
+
+客户端 IP 统一使用 Express 解析后的 `req.ip`。不要配置自定义来源头。
+
+### 反向代理
+
+默认配置仅监听 `127.0.0.1`，并只信任本机回环代理。反向代理必须与服务部署在同一台主机，并覆盖客户端传入的转发头：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8633;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+若代理位于 Docker 网桥、CDN 或其他主机，必须把 `trustProxy` 设置为明确的代理 IP/CIDR 白名单；不要设置为 `true`。
 
 ### 多进程
 
@@ -126,8 +143,9 @@
 
 | 变量 | 来源 |
 |------|------|
-| `${projectName}` `/v1/{port}` `${staticDir}` `${apiDir}` | 配置 |
-| `${maxRequests}` `${timeWindow}` `${timezone}` | 限流 / 日志配置 |
+| `${projectName}` `${port}` `${apiDir}` | 配置 |
+| `${maxRequests}` `${timeWindow}` | 限流配置 |
+| `${year}` | 当前年份 |
 
 ## 生效方式
 
