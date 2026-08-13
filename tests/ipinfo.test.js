@@ -95,6 +95,8 @@ function createConfig(upstreamApis, overrides = {}) {
 function createContext(config, options = {}) {
   const cacheGetCalls = [];
   const cacheSetCalls = [];
+  const cacheSetNXCalls = [];
+  const cacheDeleteCalls = [];
   const requestCalls = [];
   const cache = {
     async get(key) {
@@ -108,6 +110,20 @@ function createContext(config, options = {}) {
     },
     async set(key, value, ttl) {
       cacheSetCalls.push({ key, value, ttl });
+      if (typeof options.cacheSet === "function") {
+        return options.cacheSet(key, value, ttl);
+      }
+    },
+    async setNX(key, value, ttl) {
+      cacheSetNXCalls.push({ key, value, ttl });
+      if (typeof options.cacheSetNX === "function") {
+        return options.cacheSetNX(key, value, ttl);
+      }
+      return true;
+    },
+    async delIfValue(key, value) {
+      cacheDeleteCalls.push({ key, value });
+      return true;
     }
   };
   const axiosGet = async (url, requestOptions) => {
@@ -121,6 +137,8 @@ function createContext(config, options = {}) {
   return {
     cacheGetCalls,
     cacheSetCalls,
+    cacheSetNXCalls,
+    cacheDeleteCalls,
     requestCalls,
     load() {
       return loadIpinfo(config, axiosGet, cache);
@@ -156,6 +174,33 @@ function assertStatusCode(statusCode) {
     return true;
   };
 }
+
+describe("ipinfo client IP", () => {
+  it("should use Express resolved req.ip instead of forwarding headers", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+    const request = {
+      ip: "198.51.100.20",
+      connection: { remoteAddress: "127.0.0.1" },
+      get() {
+        throw new Error("forwarding headers must not be read");
+      }
+    };
+
+    await context.run(ipinfo => {
+      assert.strictEqual(ipinfo.getClientIp(request), "198.51.100.20");
+    });
+  });
+
+  it("should return an empty IP when Express has no resolved client IP", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+
+    await context.run(ipinfo => {
+      assert.strictEqual(ipinfo.getClientIp({}), "");
+    });
+  });
+});
 
 describe("ipinfo configured provider capabilities", () => {
   it("should keep bt.cn IPv4-only and the other configured providers dual-stack", () => {
@@ -405,21 +450,177 @@ describe("ipinfo URL and cache behavior", () => {
   it("should return a valid cached result without calling an upstream provider", async () => {
     const cachedValue = {
       source: "cache",
+      raw_data: { internal: "cached upstream response" },
       data: { ip: "198.51.100.0", city: "Test City" }
     };
-    const config = createConfig([createProvider("dual")]);
+    Object.defineProperty(cachedValue, "__proto__", {
+      value: { raw_data: { internal: "poisoned cache response" } },
+      enumerable: true
+    });
+    const config = createConfig([createProvider("dual")], {
+      response_fields: ["ip", "city"]
+    });
     const context = createContext(config, { cachedValue });
-    const result = await context.run(ipinfo => (
-      ipinfo.queryIpInfoWithRetry(" 198.51.100.42 ")
-    ));
+    const { result, responseBody } = await context.run(async ipinfo => {
+      const result = await ipinfo.queryIpInfoWithRetry(" 198.51.100.42 ");
+      const route = ipinfo.stack.find(layer => layer.route?.path === "/");
+      const response = {
+        body: null,
+        json(body) {
+          this.body = body;
+          return this;
+        }
+      };
+      await route.route.stack[0].handle({ query: { ip: "198.51.100.42" } }, response);
+      return { result, responseBody: response.body };
+    });
 
-    assert.deepStrictEqual(context.cacheGetCalls, ["ipinfo:198.51.100.0/24"]);
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:198.51.100.0/24",
+      "ipinfo:198.51.100.0/24"
+    ]);
     assert.deepStrictEqual(result, {
       source: "cache",
       data: { ip: "198.51.100.42", city: "Test City" }
     });
+    assert.deepStrictEqual(responseBody, {
+      source: "cache",
+      data: { ip: "198.51.100.42", city: "Test City" }
+    });
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(result, "raw_data"), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(responseBody, "raw_data"), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(responseBody, "__proto__"), false);
     assert.strictEqual(context.requestCalls.length, 0);
     assert.strictEqual(context.cacheSetCalls.length, 0);
+  });
+
+  it("should ignore malformed cache values", async () => {
+    const functionValue = () => {};
+    functionValue.raw_data = { internal: "invalid cache value" };
+    const arrayValue = [];
+    arrayValue.raw_data = { internal: "invalid cache value" };
+    const inheritedSourceValue = Object.create({ source: "cache" });
+    inheritedSourceValue.data = { city: "cached" };
+    const malformedValues = [null, "invalid", arrayValue, functionValue, {
+      source: "cache",
+      data: []
+    }, {
+      data: { city: "cached" }
+    }, inheritedSourceValue, {
+      source: "",
+      data: { city: "cached" }
+    }, {
+      source: "   ",
+      data: { city: "cached" }
+    }, {
+      source: 1,
+      data: { city: "cached" }
+    }];
+
+    for (const cachedValue of malformedValues) {
+      const config = createConfig([createProvider("dual")]);
+      const context = createContext(config, { cachedValue });
+      const result = await context.run(ipinfo => ipinfo.queryIpInfoWithRetry("203.0.113.22"));
+
+      assert.deepStrictEqual(result, {
+        source: "dual",
+        data: { ip: "203.0.113.22" }
+      });
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(result, "raw_data"), false);
+      assert.strictEqual(context.requestCalls.length, 1);
+      assert.strictEqual(context.cacheSetCalls.length, 1);
+    }
+  });
+
+  it("should share IPv6 cache entries by /48 prefix", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+
+    await context.run(async ipinfo => {
+      await ipinfo.queryIpInfoWithRetry("2001:db8::1");
+      await ipinfo.queryIpInfoWithRetry("2001:db8::2");
+    });
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:2001:0db8:0000/48",
+      "ipinfo:2001:0db8:0000/48"
+    ]);
+    assert.strictEqual(context.requestCalls.length, 2);
+  });
+
+  it("should normalize IPv6 cache keys across case and compression forms", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+
+    await context.run(async ipinfo => {
+      await ipinfo.queryIpInfoWithRetry("2001:DB8:0:0::1");
+      await ipinfo.queryIpInfoWithRetry("2001:db8::2");
+    });
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:2001:0db8:0000/48",
+      "ipinfo:2001:0db8:0000/48"
+    ]);
+  });
+
+  it("should keep different IPv6 /48 prefixes separate", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+
+    await context.run(async ipinfo => {
+      await ipinfo.queryIpInfoWithRetry("2001:db8::1");
+      await ipinfo.queryIpInfoWithRetry("2001:db9::1");
+    });
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:2001:0db8:0000/48",
+      "ipinfo:2001:0db9:0000/48"
+    ]);
+  });
+
+  it("should normalize dotted IPv6 forms into canonical /48 cache keys", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config);
+
+    await context.run(async ipinfo => {
+      await ipinfo.queryIpInfoWithRetry("::fffe:192.0.2.128");
+      await ipinfo.queryIpInfoWithRetry("::ffff:0:192.0.2.128");
+    });
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:0000:0000:0000/48",
+      "ipinfo:0000:0000:0000/48"
+    ]);
+    assert.strictEqual(context.requestCalls.length, 2);
+  });
+
+  it("should reuse the /48 cache entry for a later address in the same /48", async () => {
+    const config = createConfig([createProvider("dual")]);
+    let context;
+    context = createContext(config, {
+      cacheGet: key => {
+        for (let index = context.cacheSetCalls.length - 1; index >= 0; index--) {
+          if (context.cacheSetCalls[index].key === key) {
+            return context.cacheSetCalls[index].value;
+          }
+        }
+        return null;
+      }
+    });
+
+    const result = await context.run(async ipinfo => {
+      await ipinfo.queryIpInfoWithRetry("2001:db8::1");
+      return ipinfo.queryIpInfoWithRetry("2001:db8::2");
+    });
+
+    assert.deepStrictEqual(context.cacheGetCalls, [
+      "ipinfo:2001:0db8:0000/48",
+      "ipinfo:2001:0db8:0000/48"
+    ]);
+    assert.deepStrictEqual(context.requestCalls.map(call => call.url), [
+      "https://dual.test/lookup?ip=2001%3Adb8%3A%3A1"
+    ]);
+    assert.strictEqual(context.cacheSetCalls.length, 1);
+    assert.deepStrictEqual(result, {
+      source: "dual",
+      data: { ip: "2001:db8::2" }
+    });
   });
 
   it("should cache a successful provider response with the configured TTL", async () => {
@@ -431,5 +632,28 @@ describe("ipinfo URL and cache behavior", () => {
     assert.strictEqual(context.cacheSetCalls[0].key, "ipinfo:203.0.113.0/24");
     assert.strictEqual(context.cacheSetCalls[0].ttl, 321);
     assert.deepStrictEqual(context.cacheSetCalls[0].value, result);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(result, "raw_data"), false);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(context.cacheSetCalls[0].value, "raw_data"),
+      false
+    );
+  });
+
+  it("should return an upstream result when cache persistence fails", async () => {
+    const config = createConfig([createProvider("dual")]);
+    const context = createContext(config, {
+      cacheSet() {
+        throw new Error("cache unavailable");
+      }
+    });
+
+    const result = await context.run(ipinfo => ipinfo.queryIpInfoWithRetry("203.0.113.45"));
+
+    assert.deepStrictEqual(result, {
+      source: "dual",
+      data: { ip: "203.0.113.45" }
+    });
+    assert.strictEqual(context.requestCalls.length, 1);
+    assert.strictEqual(context.cacheSetCalls.length, 1);
   });
 });

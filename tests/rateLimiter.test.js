@@ -130,50 +130,59 @@ describe("RateLimiter middleware", () => {
     assert.strictEqual(res.statusCode, 200);
   });
 
-  it("should fail-open and call next when store throws error", async () => {
+  it("should use local fallback when store throws error", async () => {
     const origCheck = rateLimitStore.getStore().check;
     rateLimitStore.getStore().check = () => { throw new Error("store error"); };
+    try {
+      const limiter = new RateLimiter({ enabled: true, timeWindow: 60, maxRequests: 1 });
+      const middleware = limiter.middleware();
+      const req = createMockReq({ ip: "198.51.100.40" });
+      const firstResponse = createMockRes();
+      const secondResponse = createMockRes();
 
-    const limiter = new RateLimiter({ enabled: true, timeWindow: 60, maxRequests: 1 });
-    const middleware = limiter.middleware();
-    const req = createMockReq();
-    const res = createMockRes();
-
-    await invokeMiddleware(middleware, req, res);
-    rateLimitStore.getStore().check = origCheck;
+      await invokeMiddleware(middleware, req, firstResponse);
+      await invokeMiddleware(middleware, req, secondResponse);
+      assert.strictEqual(firstResponse.statusCode, 200);
+      assert.strictEqual(secondResponse.statusCode, 429);
+    } finally {
+      rateLimitStore.getStore().check = origCheck;
+    }
   });
 
-  it("should fail-open when store returns rejected promise", async () => {
+  it("should use local fallback when store returns rejected promise", async () => {
     const origCheck = rateLimitStore.getStore().check;
     rateLimitStore.getStore().check = () => Promise.reject(new Error("store reject"));
+    try {
+      const limiter = new RateLimiter({ enabled: true, timeWindow: 60, maxRequests: 1 });
+      const middleware = limiter.middleware();
+      const req = createMockReq({ ip: "198.51.100.41" });
+      const response = createMockRes();
 
-    const limiter = new RateLimiter({ enabled: true, timeWindow: 60, maxRequests: 1 });
-    const middleware = limiter.middleware();
-    const req = createMockReq();
-    const res = createMockRes();
-
-    await invokeMiddleware(middleware, req, res);
-    rateLimitStore.getStore().check = origCheck;
+      await invokeMiddleware(middleware, req, response);
+      assert.strictEqual(response.statusCode, 200);
+    } finally {
+      rateLimitStore.getStore().check = origCheck;
+    }
   });
 });
 
 describe("RateLimiter getClientIP", () => {
-  it("should extract IP from X-Forwarded-For header", () => {
+  it("should use req.ip instead of X-Forwarded-For header", () => {
     const limiter = new RateLimiter({ ipHeader: "X-Forwarded-For" });
-    const req = createMockReq({ forwardedFor: "10.0.0.5" });
-    assert.strictEqual(limiter.getClientIP(req), "10.0.0.5");
+    const req = createMockReq({ forwardedFor: "10.0.0.5", ip: "198.51.100.5" });
+    assert.strictEqual(limiter.getClientIP(req), "198.51.100.5");
   });
 
-  it("should extract first IP from X-Forwarded-For with multiple proxies", () => {
+  it("should ignore a forged X-Forwarded-For chain", () => {
     const limiter = new RateLimiter({ ipHeader: "X-Forwarded-For" });
-    const req = createMockReq({ forwardedFor: "10.0.0.5, 192.168.1.1, 172.16.0.1" });
-    assert.strictEqual(limiter.getClientIP(req), "10.0.0.5");
+    const req = createMockReq({ forwardedFor: "10.0.0.5, 192.168.1.1", ip: "198.51.100.6" });
+    assert.strictEqual(limiter.getClientIP(req), "198.51.100.6");
   });
 
-  it("should handle X-Forwarded-For with spaces", () => {
+  it("should not parse whitespace-separated forwarding headers", () => {
     const limiter = new RateLimiter({ ipHeader: "X-Forwarded-For" });
-    const req = createMockReq({ forwardedFor: "  10.0.0.5 , 192.168.1.1  " });
-    assert.strictEqual(limiter.getClientIP(req), "10.0.0.5");
+    const req = createMockReq({ forwardedFor: "  10.0.0.5 , 192.168.1.1  ", ip: "198.51.100.7" });
+    assert.strictEqual(limiter.getClientIP(req), "198.51.100.7");
   });
 
   it("should fall back to req.ip when X-Forwarded-For is empty", () => {
@@ -188,11 +197,11 @@ describe("RateLimiter getClientIP", () => {
     assert.strictEqual(limiter.getClientIP(req), "10.1.1.1");
   });
 
-  it("should fall back to connection.remoteAddress when ip not set", () => {
+  it("should fall back to a stable placeholder when req.ip is not set", () => {
     const limiter = new RateLimiter({ ipHeader: "X-Forwarded-For" });
     const req = createMockReq({ forwardedFor: undefined, ip: undefined });
     req.connection = { remoteAddress: "::1" };
-    assert.strictEqual(limiter.getClientIP(req), "::1");
+    assert.strictEqual(limiter.getClientIP(req), "0.0.0.0");
   });
 
   it("should return 0.0.0.0 when no IP info available", () => {
@@ -201,14 +210,14 @@ describe("RateLimiter getClientIP", () => {
     assert.strictEqual(limiter.getClientIP(req), "0.0.0.0");
   });
 
-  it("should use custom ipHeader name", () => {
+  it("should ignore custom forwarding header configuration", () => {
     const limiter = new RateLimiter({ ipHeader: "X-Real-IP" });
     const req = createMockReq();
     req.get = (header) => {
       if (header === "X-Real-IP") return "5.5.5.5";
       return undefined;
     };
-    assert.strictEqual(limiter.getClientIP(req), "5.5.5.5");
+    assert.strictEqual(limiter.getClientIP(req), "127.0.0.1");
   });
 
   it("should skip ipHeader check when ipHeader is falsy", () => {
@@ -217,10 +226,10 @@ describe("RateLimiter getClientIP", () => {
     assert.strictEqual(limiter.getClientIP(req), "127.0.0.1");
   });
 
-  it("should use X-Forwarded-For as default ipHeader", () => {
+  it("should use req.ip regardless of legacy ipHeader configuration", () => {
     const limiter = new RateLimiter({});
-    const req = createMockReq({ forwardedFor: "1.2.3.4" });
-    assert.strictEqual(limiter.getClientIP(req), "1.2.3.4");
+    const req = createMockReq({ forwardedFor: "1.2.3.4", ip: "198.51.100.8" });
+    assert.strictEqual(limiter.getClientIP(req), "198.51.100.8");
   });
 });
 
@@ -259,9 +268,9 @@ describe("RateLimiter constructor", () => {
     assert.strictEqual(limiter.maxRequests, 100);
   });
 
-  it("should default ipHeader to X-Forwarded-For", () => {
+  it("should not expose a configurable client IP header", () => {
     const limiter = new RateLimiter({ enabled: true });
-    assert.strictEqual(limiter.ipHeader, "X-Forwarded-For");
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(limiter, "ipHeader"), false);
   });
 
   it("should default enabled to true when not specified", () => {

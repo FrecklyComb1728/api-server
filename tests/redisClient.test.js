@@ -54,6 +54,7 @@ function mockIoredis() {
 }
 
 beforeEach(() => {
+  delete process.env.REDIS_PASSWORD;
   callLog = [];
   mockRedisInstance = null;
   resetModule();
@@ -61,6 +62,7 @@ beforeEach(() => {
 });
 
 after(() => {
+  delete process.env.REDIS_PASSWORD;
   resetModule();
 });
 
@@ -96,6 +98,20 @@ describe("redisClient init", () => {
     assert.strictEqual(strategy(1), 200);
     assert.strictEqual(strategy(3), 600);
     assert.strictEqual(strategy(4), null);
+  });
+
+  it("should prefer REDIS_PASSWORD over config password", () => {
+    process.env.REDIS_PASSWORD = "environment-secret";
+    const redisClient = require("../libs/redisClient");
+    redisClient.init({ host: "127.0.0.1", port: 6379, password: "config-secret" });
+    assert.strictEqual(callLog[0][1].password, "environment-secret");
+  });
+
+  it("should use config password when REDIS_PASSWORD is empty", () => {
+    process.env.REDIS_PASSWORD = "";
+    const redisClient = require("../libs/redisClient");
+    redisClient.init({ host: "127.0.0.1", port: 6379, password: "config-secret" });
+    assert.strictEqual(callLog[0][1].password, "config-secret");
   });
 
   it("should return same client on second init call", () => {

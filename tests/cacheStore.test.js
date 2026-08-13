@@ -119,6 +119,23 @@ describe("MemoryStore del", () => {
   it("should not throw when deleting non-existent key", async () => {
     await assert.doesNotReject(() => store.del("no_such_key"));
   });
+
+  it("should delete only when the stored value matches", async () => {
+    await store.set("lock", "owner-a", 60);
+    assert.strictEqual(await store.delIfValue("lock", "owner-b"), false);
+    assert.strictEqual(await store.has("lock"), true);
+    assert.strictEqual(await store.delIfValue("lock", "owner-a"), true);
+    assert.strictEqual(await store.has("lock"), false);
+  });
+
+  it("should not delete a lock acquired by a new owner", async () => {
+    await store.setNX("reacquired_lock", "owner-a", 0.001);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.strictEqual(await store.setNX("reacquired_lock", "owner-b", 60), true);
+
+    assert.strictEqual(await store.delIfValue("reacquired_lock", "owner-a"), false);
+    assert.strictEqual(await store.get("reacquired_lock"), "owner-b");
+  });
 });
 
 describe("MemoryStore has", () => {
@@ -170,6 +187,15 @@ describe("MemoryStore setNX", () => {
     assert.strictEqual(result, true);
     const val = await store.get("nx_expired");
     assert.strictEqual(val, "new");
+  });
+
+  it("should allow exactly one concurrent lock acquisition", async () => {
+    const attempts = await Promise.all(
+      Array.from({ length: 32 }, (_, index) => store.setNX("atomic_lock", `owner-${index}`, 60))
+    );
+
+    assert.strictEqual(attempts.filter(Boolean).length, 1);
+    assert.match(await store.get("atomic_lock"), /^owner-\d+$/);
   });
 });
 
